@@ -1,0 +1,16 @@
+project: healthcare_ml
+registry: data/feast_registry.db
+provider: local
+
+offline_store:
+  type: duckdb                          # Free local dev; swap to snowflake for prod
+
+online_store:
+  type: sqlite                          # Free local dev; swap to redis or dynamodb for prod
+  path: data/online_store.db
+
+entity_key_serialization_version: 2
+
+flags:
+  alpha_features: false
+  on_demand_transforms: true

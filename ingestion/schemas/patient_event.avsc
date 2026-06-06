@@ -1,0 +1,105 @@
+{
+  "type": "record",
+  "name": "PatientEvent",
+  "namespace": "com.healthcare.patients",
+  "doc": "Represents a patient registration or profile update event.",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "doc": "UUID uniquely identifying this event"
+    },
+    {
+      "name": "event_type",
+      "type": {
+        "type": "enum",
+        "name": "PatientEventType",
+        "symbols": ["REGISTERED", "PROFILE_UPDATED", "INSURANCE_UPDATED", "DEACTIVATED"]
+      }
+    },
+    {
+      "name": "event_timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis"
+    },
+    {
+      "name": "patient_id",
+      "type": "string",
+      "doc": "UUID of the patient — stable across all events"
+    },
+    {
+      "name": "date_of_birth",
+      "type": "int",
+      "logicalType": "date",
+      "doc": "Epoch days since 1970-01-01"
+    },
+    {
+      "name": "gender",
+      "type": {
+        "type": "enum",
+        "name": "Gender",
+        "symbols": ["MALE", "FEMALE", "NON_BINARY", "PREFER_NOT_TO_SAY", "UNKNOWN"]
+      }
+    },
+    {
+      "name": "zip_code",
+      "type": "string",
+      "doc": "5-digit US ZIP code of patient residence"
+    },
+    {
+      "name": "state",
+      "type": "string",
+      "doc": "2-letter US state abbreviation"
+    },
+    {
+      "name": "insurance_type",
+      "type": {
+        "type": "enum",
+        "name": "InsuranceType",
+        "symbols": [
+          "COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY",
+          "WORKERS_COMP", "TRICARE", "UNKNOWN"
+        ]
+      }
+    },
+    {
+      "name": "insurance_plan_name",
+      "type": ["null", "string"],
+      "default": null
+    },
+    {
+      "name": "preferred_language",
+      "type": "string",
+      "default": "en"
+    },
+    {
+      "name": "preferred_communication_channel",
+      "type": {
+        "type": "enum",
+        "name": "CommunicationChannel",
+        "symbols": ["SMS", "EMAIL", "PHONE", "PORTAL"]
+      },
+      "default": "EMAIL"
+    },
+    {
+      "name": "distance_to_clinic_miles",
+      "type": ["null", "float"],
+      "default": null,
+      "doc": "Approximate driving distance to primary clinic"
+    },
+    {
+      "name": "has_chronic_condition",
+      "type": "boolean",
+      "default": false,
+      "doc": "Whether patient has at least one chronic condition on record"
+    },
+    {
+      "name": "registration_source",
+      "type": {
+        "type": "enum",
+        "name": "RegistrationSource",
+        "symbols": ["WEB_PORTAL", "MOBILE_APP", "FRONT_DESK", "REFERRAL", "IMPORTED"]
+      }
+    }
+  ]
+}

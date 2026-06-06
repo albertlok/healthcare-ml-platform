@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: ml_patient_appointment_stats
+    description: >
+      Point-in-time correct rolling appointment statistics per patient.
+      Used as the primary offline source for the Feast patient_appointment_stats feature view.
+      Each row represents one appointment event with features computed from
+      strictly prior appointments only (no data leakage).
+    columns:
+      - name: patient_id
+        tests: [not_null]
+      - name: appointment_id
+        tests: [not_null, unique]
+      - name: feature_timestamp
+        tests: [not_null]
+      - name: label
+        description: "Target variable: 1=no-show, 0=showed up."
+        tests: [not_null]
+      - name: no_show_rate_30d
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0.0
+              max_value: 1.0
+      - name: no_show_rate_90d
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0.0
+              max_value: 1.0
+      - name: total_appointments_90d
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: ml_patient_demographics
+    description: >
+      Patient demographic features for ML training and inference.
+      Joined from the current SCD2 patient dimension.
+
+  - name: ml_appointment_context
+    description: >
+      Appointment-level features (type, time-of-day, lead time, reminder status)
+      used as the Feast appointment_context feature view source.

@@ -1,0 +1,69 @@
+stages:
+  raw_features:
+    cmd: python ml/train.py --stage export-features
+    deps:
+      - ml/train.py
+      - feature_store/feature_repo/
+      - ml/params.yaml
+    params:
+      - ml/params.yaml:
+          - features
+    outs:
+      - data/features/features.parquet
+
+  split:
+    cmd: python ml/train.py --stage split
+    deps:
+      - ml/train.py
+      - data/features/features.parquet
+    params:
+      - ml/params.yaml:
+          - split
+    outs:
+      - data/train.parquet
+      - data/val.parquet
+      - data/test.parquet
+
+  train:
+    cmd: python ml/train.py --stage train
+    deps:
+      - ml/train.py
+      - data/train.parquet
+      - data/val.parquet
+    params:
+      - ml/params.yaml:
+          - model
+    outs:
+      - models/no_show_model.json
+      - models/feature_names.json
+    metrics:
+      - reports/train_metrics.json:
+          cache: false
+
+  evaluate:
+    cmd: python ml/evaluate.py
+    deps:
+      - ml/evaluate.py
+      - data/test.parquet
+      - models/no_show_model.json
+      - models/feature_names.json
+    params:
+      - ml/params.yaml:
+          - thresholds
+    outs:
+      - reports/confusion_matrix.png
+      - reports/shap_summary.png
+      - reports/feature_importance.png
+    metrics:
+      - reports/eval_metrics.json:
+          cache: false
+
+  register:
+    cmd: python ml/train.py --stage register
+    deps:
+      - ml/train.py
+      - models/no_show_model.json
+      - reports/eval_metrics.json
+    outs:
+      - models/mlflow_run_id.txt:
+          cache: false

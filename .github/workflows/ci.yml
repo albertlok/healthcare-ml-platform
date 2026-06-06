@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    name: Lint + Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run black
+        run: black --check .
+
+      - name: Run isort
+        run: isort --check-only .
+
+      - name: Run flake8
+        run: flake8 .
+
+      - name: Run mypy
+        run: mypy pipelines/ ml/ rag/ --ignore-missing-imports
+        continue-on-error: true   # Non-blocking until type coverage is complete
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --cov=pipelines --cov=ml --cov=rag --cov-report=xml
+        env:
+          DUCKDB_PATH: ./data/test.duckdb
+          DELTA_LAKE_PATH: /tmp/healthcare-test
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+          SCHEMA_REGISTRY_URL: http://localhost:8081
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  dbt-compile:
+    name: dbt Compile
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dbt
+        run: pip install dbt-core dbt-duckdb
+
+      - name: dbt deps
+        run: dbt deps --project-dir pipelines/dbt
+
+      - name: dbt compile (dev target)
+        run: |
+          dbt compile \
+            --project-dir pipelines/dbt \
+            --profiles-dir pipelines/dbt \
+            --target dev
+        env:
+          DUCKDB_PATH: /tmp/ci_test.duckdb
+
+      - name: sqlfluff lint
+        run: sqlfluff lint pipelines/dbt/models --dialect duckdb --processes 4
+        continue-on-error: true
+
+  feast-validate:
+    name: Feast Feature Repo Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install feast
+        run: pip install "feast[duckdb]>=0.40.0"
+
+      - name: feast apply (dry run)
+        run: feast apply --project-dir feature_store/feature_repo
+        env:
+          FEAST_REPO_PATH: feature_store/feature_repo
+          DUCKDB_PATH: /tmp/feast_ci.duckdb

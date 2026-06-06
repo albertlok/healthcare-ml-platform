@@ -1,0 +1,63 @@
+version: 2
+
+sources:
+  - name: silver
+    description: "Cleaned Delta Lake silver layer tables."
+    database: "{{ env_var('DUCKDB_PATH', 'dev') }}"
+    schema: silver
+    tables:
+      - name: appointments
+        description: "Deduplicated, cleaned appointment events with DQ flags."
+      - name: patients
+        description: "SCD Type 2 patient dimension. Filter is_current=true for latest state."
+
+models:
+  - name: stg_appointments
+    description: "Staging model for appointment events. Applies light casts and renames only."
+    columns:
+      - name: appointment_id
+        description: "UUID of the appointment."
+        tests:
+          - not_null
+          - unique
+      - name: patient_id
+        description: "UUID of the patient."
+        tests:
+          - not_null
+      - name: provider_id
+        tests:
+          - not_null
+      - name: event_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"]
+      - name: duration_minutes
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 5
+              max_value: 480
+      - name: is_no_show
+        tests:
+          - not_null
+
+  - name: stg_patients
+    description: "Staging model for current patient records."
+    columns:
+      - name: patient_id
+        tests:
+          - not_null
+          - unique
+      - name: gender
+        tests:
+          - accepted_values:
+              values: ["MALE", "FEMALE", "NON_BINARY", "PREFER_NOT_TO_SAY", "UNKNOWN"]
+      - name: insurance_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "WORKERS_COMP", "TRICARE", "UNKNOWN"]
+      - name: is_current
+        tests:
+          - not_null

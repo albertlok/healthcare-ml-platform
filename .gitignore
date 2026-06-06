@@ -1,0 +1,67 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+htmlcov/
+.coverage
+coverage.xml
+.pytest_cache/
+.mypy_cache/
+
+# DVC
+/data/
+/models/
+/reports/
+*.dvc
+!.dvc/.gitignore
+
+# dbt
+pipelines/dbt/target/
+pipelines/dbt/dbt_packages/
+pipelines/dbt/logs/
+pipelines/dbt/profiles.yml
+
+# Feast
+feature_store/feature_repo/data/
+feature_store/feature_repo/registry.db
+data/feast_registry.db
+data/online_store.db
+
+# Spark / Delta
+*.parquet
+*.orc
+_delta_log/
+_checkpoints/
+
+# MLflow
+mlruns/
+
+# ChromaDB
+chroma_data/
+
+# Great Expectations
+gx/uncommitted/
+
+# Terraform
+infra/terraform/**/.terraform/
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.*
+infra/terraform/**/.terraform.lock.hcl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store

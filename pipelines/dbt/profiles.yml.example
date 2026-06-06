@@ -1,0 +1,43 @@
+healthcare_ml:
+  target: dev
+  outputs:
+
+    # ── Local dev — zero infra, zero cost ─────────────────────
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', './data/dev.duckdb') }}"
+      threads: 4
+
+    # ── Snowflake production ───────────────────────────────────
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'TRANSFORMER') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'prod_healthcare') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
+      schema: staging
+      threads: 8
+      client_session_keep_alive: false
+      query_tag: dbt
+
+    # ── BigQuery (GCP) ─────────────────────────────────────────
+    bigquery:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT_ID') }}"
+      dataset: healthcare_staging
+      threads: 4
+      timeout_seconds: 300
+
+    # ── Redshift (AWS) ─────────────────────────────────────────
+    redshift:
+      type: redshift
+      host: "{{ env_var('REDSHIFT_HOST') }}"
+      user: "{{ env_var('REDSHIFT_USER') }}"
+      password: "{{ env_var('REDSHIFT_PASSWORD') }}"
+      port: 5439
+      dbname: healthcare
+      schema: staging
+      threads: 4

@@ -1,0 +1,30 @@
+model:
+  n_estimators: 200
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_weight: 5
+  # ~15% no-shows → positive class weight ≈ (1-0.15)/0.15
+  scale_pos_weight: 5.67
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+  eval_metric: aucpr
+  early_stopping_rounds: 20
+
+split:
+  test_size: 0.2
+  val_size: 0.1
+  random_state: 42
+  stratify: true
+
+features:
+  # Feast feature service to retrieve (must match feature_services.py)
+  service_name: no_show_training_v1
+  # Entity lookback window for offline retrieval
+  entity_lookback_days: 90
+
+thresholds:
+  # Probability threshold for positive classification
+  # Set lower to reduce false negatives (missed no-shows)
+  classification: 0.35

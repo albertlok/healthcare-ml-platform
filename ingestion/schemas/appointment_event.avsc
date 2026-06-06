@@ -1,0 +1,118 @@
+{
+  "type": "record",
+  "name": "AppointmentEvent",
+  "namespace": "com.healthcare.appointments",
+  "doc": "Represents a patient appointment lifecycle event.",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "doc": "UUID uniquely identifying this event"
+    },
+    {
+      "name": "event_type",
+      "type": {
+        "type": "enum",
+        "name": "AppointmentEventType",
+        "symbols": ["SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"]
+      },
+      "doc": "Lifecycle event type"
+    },
+    {
+      "name": "event_timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Epoch milliseconds when this event occurred"
+    },
+    {
+      "name": "appointment_id",
+      "type": "string",
+      "doc": "UUID of the appointment"
+    },
+    {
+      "name": "patient_id",
+      "type": "string",
+      "doc": "UUID of the patient"
+    },
+    {
+      "name": "provider_id",
+      "type": "string",
+      "doc": "UUID of the healthcare provider"
+    },
+    {
+      "name": "clinic_id",
+      "type": "string",
+      "doc": "UUID of the clinic location"
+    },
+    {
+      "name": "appointment_type",
+      "type": {
+        "type": "enum",
+        "name": "AppointmentType",
+        "symbols": [
+          "NEW_PATIENT", "FOLLOW_UP", "ANNUAL_WELLNESS", "URGENT_CARE",
+          "TELEHEALTH", "SPECIALIST_REFERRAL", "PROCEDURE", "LAB_REVIEW"
+        ]
+      }
+    },
+    {
+      "name": "scheduled_start_ts",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "When the appointment is/was scheduled to start"
+    },
+    {
+      "name": "scheduled_duration_minutes",
+      "type": "int",
+      "doc": "Planned appointment duration in minutes"
+    },
+    {
+      "name": "is_reminder_sent",
+      "type": "boolean",
+      "default": false,
+      "doc": "Whether an automated reminder was sent to the patient"
+    },
+    {
+      "name": "reminder_channels",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "default": [],
+      "doc": "Channels through which reminders were sent: SMS, EMAIL, PHONE"
+    },
+    {
+      "name": "insurance_type",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Patient insurance type at time of scheduling"
+    },
+    {
+      "name": "copay_amount_usd",
+      "type": ["null", "float"],
+      "default": null,
+      "doc": "Expected copay in USD"
+    },
+    {
+      "name": "cancellation_reason",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Reason for cancellation — null if not cancelled"
+    },
+    {
+      "name": "lead_time_hours",
+      "type": ["null", "int"],
+      "default": null,
+      "doc": "Hours between scheduling and appointment start"
+    },
+    {
+      "name": "metadata",
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "default": {},
+      "doc": "Arbitrary key-value metadata for extensibility"
+    }
+  ]
+}

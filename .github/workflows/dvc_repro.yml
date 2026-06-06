@@ -1,0 +1,50 @@
+name: DVC Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ml/**"
+      - "feature_store/**"
+      - "pipelines/dbt/models/marts/ml/**"
+
+jobs:
+  dvc-repro:
+    name: Reproduce DVC ML Pipeline
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e "."
+
+      - name: Configure DVC remote
+        run: |
+          dvc remote modify gdrive gdrive_use_service_account true
+          dvc remote modify gdrive gdrive_service_account_json_file_path /tmp/sa.json
+        env:
+          GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+
+      - name: DVC pull cached data
+        run: dvc pull --run-cache
+        continue-on-error: true
+
+      - name: DVC repro
+        run: dvc repro
+        env:
+          DUCKDB_PATH: ${{ secrets.DUCKDB_PATH }}
+          FEAST_REPO_PATH: feature_store/feature_repo
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+
+      - name: Show metrics
+        run: dvc metrics show
+
+      - name: Push DVC artifacts
+        run: dvc push
