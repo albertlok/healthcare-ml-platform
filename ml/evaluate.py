@@ -129,6 +129,7 @@ def evaluate() -> None:
     # brings when it's used to split a node. It's more reliable than "weight" (which
     # just counts splits) because a feature used once in a critical split scores higher
     # than a feature used many times in unimportant splits.
+    importance = booster.get_score(importance_type="gain")
     fi_df = (
         pd.DataFrame(list(importance.items()), columns=["feature", "gain"])
         .sort_values("gain", ascending=True)
