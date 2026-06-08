@@ -2,12 +2,13 @@
 -- This model is the primary data source for Feast. It is materialized as a TABLE
 -- (not a view) so Feast can export it to Parquet without executing a long query each time.
 -- The 'feast-source' tag marks it as a Feast input for documentation and CI filtering.
+--
+-- materialized='table' persists results in DuckDB/Snowflake instead of re-running
+-- the query on every SELECT. For this model with window functions over large history,
+-- a view would be very slow. Tables trade storage for query speed.
 
 {{
     config(
-        -- materialized='table' persists results in DuckDB/Snowflake instead of re-running
-        -- the query on every SELECT. For this model with window functions over large history,
-        -- a view would be very slow. Tables trade storage for query speed.
         materialized='table',
         tags=['ml', 'feast-source'],
         post_hook="{{ log('Refreshed ml_patient_appointment_stats', info=true) }}"
