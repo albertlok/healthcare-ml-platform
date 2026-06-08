@@ -21,7 +21,7 @@ from data_sources import (
 )
 from entities import patient, provider
 from feast import FeatureView, Field
-from feast.types import Bool, Float32, Int32, String, UnixTimestamp
+from feast.types import Bool, Float32, Int32
 
 # ── 1. Patient Appointment Statistics ────────────────────────────────────────
 patient_appointment_stats = FeatureView(

@@ -27,7 +27,7 @@ from delta.tables import DeltaTable
 from dotenv import load_dotenv
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import BooleanType, FloatType, IntegerType, StringType, TimestampType
+from pyspark.sql.types import FloatType, TimestampType
 from pyspark.sql.window import Window
 
 load_dotenv()
@@ -161,7 +161,7 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
     existing_current = (
         spark.read.format("delta")
         .load(SILVER_PATH)
-        .filter(F.col("is_current") == True)
+        .filter(F.col("is_current"))
         .select("patient_id")
     )
 

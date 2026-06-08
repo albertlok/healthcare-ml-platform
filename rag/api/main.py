@@ -220,7 +220,7 @@ def patient_risk(patient_id: str) -> PatientRiskResponse:
 
     # Retrieve this patient's clinical notes
     results = collection.query(
-        query_embeddings=[model.encode(f"patient risk factors no-show history").tolist()],
+        query_embeddings=[model.encode("patient risk factors no-show history").tolist()],
         n_results=3,
         where={"patient_id": {"$eq": patient_id}},
         include=["documents", "metadatas", "distances"],
@@ -256,7 +256,7 @@ def patient_risk(patient_id: str) -> PatientRiskResponse:
     }[risk_tier]
 
     summary = _build_answer(
-        f"Summarize this patient's no-show risk factors in 2 sentences.",
+        "Summarize this patient's no-show risk factors in 2 sentences.",
         [{"document": notes_context}],
     )
 

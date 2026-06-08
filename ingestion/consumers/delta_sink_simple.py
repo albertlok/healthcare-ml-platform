@@ -16,7 +16,6 @@ import argparse
 import json
 import os
 import signal
-import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,7 +26,7 @@ from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
-from deltalake import DeltaTable, write_deltalake
+from deltalake import write_deltalake
 
 log = structlog.get_logger()
 

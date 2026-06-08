@@ -20,7 +20,6 @@ import argparse
 import json
 import os
 import signal
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,13 +31,11 @@ from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
 from dotenv import load_dotenv
 from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
 from pyspark.sql.types import (
     BooleanType,
     FloatType,
     IntegerType,
     LongType,
-    MapType,
     StringType,
     StructField,
     StructType,

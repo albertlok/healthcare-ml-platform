@@ -26,11 +26,11 @@ from __future__ import annotations
 import os
 import subprocess
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import structlog
 from airflow.decorators import dag, task, task_group
-from airflow.models import Connection, Variable
+from airflow.models import Connection
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.dates import days_ago
 
@@ -87,11 +87,10 @@ def patient_risk_pipeline():
     @task_group(group_id="bronze_quality")
     def bronze_quality_gate():
 
-        def _read_bronze_delta(table_path: str) -> "pd.DataFrame":
+        def _read_bronze_delta(table_path: str):  # -> pd.DataFrame
             """Read a Delta table from MinIO into a pandas DataFrame."""
             import os
 
-            import pandas as pd
             from deltalake import DeltaTable
 
             storage_options = {
@@ -419,7 +418,6 @@ def patient_risk_pipeline():
         import pandas as pd
 
         try:
-            from evidently import ColumnMapping
             from evidently.metric_preset import DataDriftPreset
             from evidently.report import Report
         except ImportError:

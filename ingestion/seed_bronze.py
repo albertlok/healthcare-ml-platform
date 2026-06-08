@@ -18,8 +18,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from deltalake import DeltaTable, write_deltalake
 
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
@@ -126,7 +124,8 @@ def make_patients() -> pd.DataFrame:
 
 def main(appointment_rows: int) -> None:
     print(
-        f"Generating {appointment_rows} appointment events and {len(PATIENT_POOL)} patient records..."
+        f"Generating {appointment_rows} appointment events "
+        f"and {len(PATIENT_POOL)} patient records..."
     )
 
     appt_df = make_appointments(appointment_rows)

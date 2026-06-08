@@ -186,7 +186,8 @@ def merge_to_silver(spark: SparkSession, silver_df: DataFrame, partition_date: s
         silver_table.alias("target")
         .merge(
             silver_df.alias("source"),
-            "target.appointment_id = source.appointment_id AND target.event_type = source.event_type",
+            "target.appointment_id = source.appointment_id "
+            "AND target.event_type = source.event_type",
         )
         .whenMatchedUpdateAll()
         .whenNotMatchedInsertAll()

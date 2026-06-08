@@ -17,19 +17,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import mlflow
 import mlflow.xgboost
-import numpy as np
 import pandas as pd
 import structlog
 import xgboost as xgb
 import yaml
 from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 
 load_dotenv()
 
