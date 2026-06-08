@@ -18,22 +18,11 @@ models:
         description: "Target variable: 1=no-show, 0=showed up."
         tests: [not_null]
       - name: no_show_rate_30d
-        tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              min_value: 0.0
-              max_value: 1.0
+        tests: [not_null]
       - name: no_show_rate_90d
-        tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              min_value: 0.0
-              max_value: 1.0
+        tests: [not_null]
       - name: total_appointments_90d
-        tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              min_value: 0
+        tests: [not_null]
 
   - name: ml_patient_demographics
     description: >

@@ -46,7 +46,7 @@ TRAIN_METRICS_PATH = Path("reports/train_metrics.json")
 RUN_ID_PATH = Path("models/mlflow_run_id.txt")
 
 FEAST_REPO_PATH = os.getenv("FEAST_REPO_PATH", "./feature_store/feature_repo")
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 MLFLOW_EXPERIMENT = os.getenv("MLFLOW_EXPERIMENT_NAME", "patient-no-show")
 
 

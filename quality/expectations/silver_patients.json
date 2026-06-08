@@ -1,0 +1,67 @@
+{
+  "data_asset_type": null,
+  "expectation_suite_name": "silver_patients",
+  "expectations": [
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": { "min_value": 1 },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "patient_id" },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "valid_from" },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "is_current" },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "date_of_birth" },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": { "column": "insurance_type" },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "insurance_type",
+        "value_set": ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "WORKERS_COMP", "TRICARE", "UNKNOWN"]
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "distance_to_clinic_miles",
+        "min_value": 0.0,
+        "max_value": 500.0
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_pair_values_to_be_in_set",
+      "kwargs": {
+        "column_A": "valid_to",
+        "column_B": "is_current",
+        "value_pairs_set": [[null, true]],
+        "mostly": 0.0
+      },
+      "meta": { "notes": "Current SCD2 rows must have valid_to = null" }
+    }
+  ],
+  "ge_cloud_id": null,
+  "meta": {
+    "great_expectations_version": "0.18.19"
+  }
+}

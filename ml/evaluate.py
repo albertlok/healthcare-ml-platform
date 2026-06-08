@@ -49,7 +49,7 @@ CM_PATH = Path("reports/confusion_matrix.png")
 SHAP_PATH = Path("reports/shap_summary.png")
 FI_PATH = Path("reports/feature_importance.png")
 
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 
 
 def load_model_and_features() -> tuple[xgb.Booster, list[str]]:

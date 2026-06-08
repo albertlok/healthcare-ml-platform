@@ -1,0 +1,18 @@
+name: bronze_appointments
+config_version: 1.0
+class_name: Checkpoint
+run_name_template: "%Y%m%d-%H%M%S-bronze-appointments"
+validations:
+  - batch_request:
+      datasource_name: bronze_delta_source
+      data_connector_name: runtime_connector
+      data_asset_name: appointments_raw
+    expectation_suite_name: bronze_appointments
+action_list:
+  - name: store_validation_result
+    action:
+      class_name: StoreValidationResultAction
+  - name: update_data_docs
+    action:
+      class_name: UpdateDataDocsAction
+      site_names: []

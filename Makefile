@@ -11,11 +11,11 @@ SHELL := /bin/bash
 up: ## Start the full local stack
 	docker compose up -d --build
 	@echo "Stack starting. Services:"
-	@echo "  Airflow UI     → http://localhost:8081  (admin/admin)"
+	@echo "  Airflow UI     → http://localhost:8088  (admin/admin)"
 	@echo "  Kafka UI       → http://localhost:8080"
 	@echo "  MinIO Console  → http://localhost:9001  (minioadmin/minioadmin)"
 	@echo "  Spark Master   → http://localhost:8082"
-	@echo "  MLflow         → http://localhost:5000"
+	@echo "  MLflow         → http://localhost:5001"
 	@echo "  ChromaDB       → http://localhost:8000"
 	@echo "  Schema Registry→ http://localhost:8081"
 
@@ -83,15 +83,34 @@ kafka-describe: ## Describe a topic: make kafka-describe topic=dev.healthcare.ap
 # ── Seeding ───────────────────────────────────────────────────
 
 .PHONY: seed
-seed: kafka-topics ## Run synthetic data producers for 5 minutes
-	python ingestion/producers/appointment_producer.py --duration 300 &
-	python ingestion/producers/patient_producer.py --duration 300
-	@echo "Seed complete."
+seed: kafka-topics ## Stream synthetic events to Kafka for 5 minutes (requires stack running)
+	docker compose exec airflow-worker bash -c \
+		"KAFKA_BOOTSTRAP_SERVERS=kafka:29092 SCHEMA_REGISTRY_URL=http://schema-registry:8081 \
+		python /opt/airflow/ingestion/producers/appointment_producer.py --duration 300 &"
+	docker compose exec airflow-worker bash -c \
+		"KAFKA_BOOTSTRAP_SERVERS=kafka:29092 SCHEMA_REGISTRY_URL=http://schema-registry:8081 \
+		python /opt/airflow/ingestion/producers/patient_producer.py --duration 300"
 
 .PHONY: seed-once
-seed-once: kafka-topics ## Produce a single batch of 1000 events (no loop)
-	python ingestion/producers/appointment_producer.py --count 1000 --once
-	python ingestion/producers/patient_producer.py --count 500 --once
+seed-once: kafka-topics ## Produce a single batch of 500 appointment + 200 patient events
+	docker compose exec airflow-worker bash -c \
+		"KAFKA_BOOTSTRAP_SERVERS=kafka:29092 SCHEMA_REGISTRY_URL=http://schema-registry:8081 \
+		python /opt/airflow/ingestion/producers/appointment_producer.py --count 500 --once"
+	docker compose exec airflow-worker bash -c \
+		"KAFKA_BOOTSTRAP_SERVERS=kafka:29092 SCHEMA_REGISTRY_URL=http://schema-registry:8081 \
+		python /opt/airflow/ingestion/producers/patient_producer.py --count 200 --once"
+
+.PHONY: seed-bronze
+seed-bronze: ## Seed bronze Delta tables directly (bypasses Kafka — no Avro deps needed)
+	docker compose exec airflow-worker bash -c \
+		"MINIO_ENDPOINT=http://minio:9000 python /opt/airflow/ingestion/seed_bronze.py --rows 2000"
+
+.PHONY: kafka-sink
+kafka-sink: ## Consume all Kafka messages and write to Delta Lake bronze (no Spark needed)
+	docker compose exec airflow-worker bash -c \
+		"KAFKA_BOOTSTRAP_SERVERS=kafka:29092 SCHEMA_REGISTRY_URL=http://schema-registry:8081 \
+		MINIO_ENDPOINT=http://minio:9000 \
+		python /opt/airflow/ingestion/consumers/delta_sink_simple.py --max-messages 10000"
 
 # ── dbt ───────────────────────────────────────────────────────
 
