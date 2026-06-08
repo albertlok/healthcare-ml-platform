@@ -111,10 +111,10 @@ class TestSilverDerivedColumns:
 
         df = pd.DataFrame({"scheduled_hour": [7, 11, 12, 14]})
         df["is_morning_appointment"] = df["scheduled_hour"] < 12
-        assert df.loc[0, "is_morning_appointment"] is True
-        assert df.loc[1, "is_morning_appointment"] is True
-        assert df.loc[2, "is_morning_appointment"] is False
-        assert df.loc[3, "is_morning_appointment"] is False
+        assert df.loc[0, "is_morning_appointment"]
+        assert df.loc[1, "is_morning_appointment"]
+        assert not df.loc[2, "is_morning_appointment"]
+        assert not df.loc[3, "is_morning_appointment"]
 
     def test_is_no_show_derived_from_event_type(self):
         import pandas as pd
@@ -134,7 +134,7 @@ class TestSilverDerivedColumns:
         df["is_cancelled"] = df["event_type"] == "CANCELLED"
         df["is_completed"] = df["event_type"] == "COMPLETED"
 
-        assert df.loc[0, "is_no_show"] is True
-        assert df.loc[1, "is_completed"] is True
-        assert df.loc[3, "is_cancelled"] is True
-        assert df.loc[2, "is_no_show"] is False
+        assert df.loc[0, "is_no_show"]
+        assert df.loc[1, "is_completed"]
+        assert df.loc[3, "is_cancelled"]
+        assert not df.loc[2, "is_no_show"]
