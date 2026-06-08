@@ -59,8 +59,13 @@ def build_spark() -> SparkSession:
         .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        # Delta optimizations
+        # optimizeWrite: Delta bins small files into larger ones (~128MB) during the write.
+        # Avoids the "small files problem" that kills query performance on cloud storage,
+        # where each file open has a ~10ms latency overhead.
         .config("spark.databricks.delta.optimizeWrite.enabled", "true")
+        # autoCompact: after every write, Delta checks if a partition has too many small
+        # files and runs a background OPTIMIZE. This is a coarser control than optimizeWrite
+        # but catches files that slipped through.
         .config("spark.databricks.delta.autoCompact.enabled", "true")
     )
     return configure_spark_with_delta_pip(builder).getOrCreate()
@@ -83,15 +88,20 @@ def run() -> None:
 
     avro_schema = fetch_avro_schema(TOPIC)
 
-    # Read from Kafka as a structured streaming source
+    # Spark Structured Streaming reads Kafka as an unbounded DataFrame.
+    # Unlike a batch read, this runs forever — each micro-batch processes new messages
+    # as they arrive. The checkpoint (below) tracks which offsets have been processed
+    # so restarts continue from where they left off, not from the beginning.
     raw_stream = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", BOOTSTRAP_SERVERS)
         .option("subscribe", TOPIC)
         .option("startingOffsets", "earliest")
+        # failOnDataLoss=false: if Kafka deletes old segments before we read them (due to
+        # retention policy), continue rather than crashing. For bronze (raw) this is acceptable;
+        # for silver transforms, consider setting to true to catch missed data.
         .option("failOnDataLoss", "false")
         .option("kafka.group.id", "spark-bronze-appointments")
-        # Skip the first 5 bytes (Confluent wire format magic byte + schema ID)
         .load()
         .select(
             F.col("key").cast(StringType()).alias("kafka_key"),
@@ -102,7 +112,11 @@ def run() -> None:
         )
     )
 
-    # Strip Confluent magic byte (1 byte) + schema ID (4 bytes) before Avro parsing
+    # Confluent Schema Registry adds a 5-byte header before the Avro payload:
+    #   byte 0: magic byte (always 0x00)
+    #   bytes 1-4: schema ID as a big-endian int32
+    # from_avro() expects raw Avro bytes, so we must strip this header first.
+    # substring(value, 6, ...) skips the first 5 bytes (Spark substring is 1-indexed).
     stripped = raw_stream.withColumn("avro_value", F.expr("substring(value, 6, length(value) - 5)"))
 
     # Deserialize Avro payload
@@ -134,14 +148,22 @@ def run() -> None:
         )
     )
 
-    # Write to Delta bronze — append-only, partition by ingestion date
+    # Write to Delta bronze — append-only, partition by ingestion date.
+    # checkpointLocation is critical: it stores the last committed Kafka offsets.
+    # If the job crashes, Spark reads the checkpoint and resumes from exactly where
+    # it stopped rather than replaying the entire topic from the beginning.
+    # Store checkpoints on durable storage (S3/ADLS/GCS) — never on local disk.
     query = (
         enriched.writeStream.format("delta")
         .outputMode("append")
         .option("checkpointLocation", CHECKPOINT_PATH)
         .option("mergeSchema", "true")
         .partitionBy("_partition_date")
-        .trigger(processingTime="60 seconds")  # micro-batch every 60s
+        # processingTime trigger creates micro-batches every 60 seconds.
+        # This is a good balance for near-real-time bronze ingestion.
+        # For true real-time (<1s latency), use .trigger(continuous="1 second") —
+        # but that requires Kafka source and is still experimental.
+        .trigger(processingTime="60 seconds")
         .start(BRONZE_PATH)
     )
 

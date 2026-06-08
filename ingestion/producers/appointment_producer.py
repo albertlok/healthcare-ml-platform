@@ -34,10 +34,15 @@ from faker import Faker
 
 load_dotenv()
 
+# structlog gives us structured JSON logs (key=value pairs) instead of plain strings.
+# This makes logs much easier to search and parse in tools like Datadog, Splunk, or CloudWatch.
 log = structlog.get_logger()
 fake = Faker()
 
+# Schema path is resolved relative to this file so the script works from any working directory.
 SCHEMA_PATH = Path(__file__).parent.parent / "schemas" / "appointment_event.avsc"
+# All config comes from env vars so the same code runs in dev, staging, and prod
+# without code changes — only the .env file changes.
 TOPIC = os.getenv("KAFKA_TOPIC_APPOINTMENTS", "dev.healthcare.appointment.scheduled")
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081")
@@ -53,6 +58,8 @@ APPOINTMENT_TYPES = [
     "LAB_REVIEW",
 ]
 EVENT_TYPES = ["SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"]
+# Weights control the realistic distribution of event types in synthetic data.
+# ~5% NO_SHOW matches real-world healthcare no-show rates (typically 5-30% depending on setting).
 EVENT_TYPE_WEIGHTS = [0.55, 0.10, 0.12, 0.18, 0.05]
 
 INSURANCE_TYPES = ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "TRICARE"]
@@ -67,7 +74,11 @@ CANCELLATION_REASONS = [
     "WEATHER",
 ]
 
-# Stable pool of 500 patients and 50 providers for referential consistency
+# Fixed pools of IDs are generated once at import time and reused across events.
+# This creates realistic referential integrity — the same patient shows up in multiple
+# appointment events, which is essential for computing per-patient features like
+# no_show_rate_90d. Without this, every event would have a unique patient and you'd
+# never accumulate history for any individual.
 _PATIENT_IDS = [str(uuid.uuid4()) for _ in range(500)]
 _PROVIDER_IDS = [str(uuid.uuid4()) for _ in range(50)]
 _CLINIC_IDS = [str(uuid.uuid4()) for _ in range(10)]
@@ -92,6 +103,9 @@ def _build_appointment_event(
     return {
         "event_id": str(uuid.uuid4()),
         "event_type": event_type,
+        # Timestamps are stored as epoch milliseconds (not seconds) — this is the Kafka/Avro
+        # convention and matches what most downstream systems (Spark, DuckDB) expect.
+        # To convert back: datetime.fromtimestamp(ts / 1000)
         "event_timestamp": int(now.timestamp() * 1000),
         "appointment_id": str(uuid.uuid4()),
         "patient_id": patient_id or random.choice(_PATIENT_IDS),
@@ -135,9 +149,19 @@ def build_producer() -> tuple[Producer, AvroSerializer]:
     producer = Producer(
         {
             "bootstrap.servers": BOOTSTRAP_SERVERS,
+            # acks="all" means the broker waits for all in-sync replicas to acknowledge
+            # the write before confirming success. Slower than acks=1 but guarantees
+            # no data loss if a broker fails immediately after a write.
             "acks": "all",
+            # Idempotence + acks=all = exactly-once delivery per partition.
+            # Without this, a network timeout could cause the producer to retry and
+            # create a duplicate message.
             "enable.idempotence": True,
+            # Snappy is a good default: fast compression with ~2-3x size reduction.
+            # Use lz4 if CPU is the bottleneck; gzip if storage is the bottleneck.
             "compression.type": "snappy",
+            # linger.ms=50 waits up to 50ms to accumulate more messages into a single batch.
+            # This trades a small amount of latency for better throughput and compression.
             "linger.ms": 50,
             "batch.size": 65536,
         }
@@ -157,14 +181,21 @@ def produce_events(
         event = _build_appointment_event()
         producer.produce(
             topic=TOPIC,
+            # Keying by patient_id ensures all events for the same patient land on
+            # the same Kafka partition. This guarantees ordering per patient and enables
+            # efficient compaction if you ever use log compaction on this topic.
             key=event["patient_id"],
             value=avro_serializer(event, ctx),
             on_delivery=_delivery_report,
         )
         sent += 1
-        # Poll to trigger delivery callbacks and avoid buffer overflow
+        # producer.poll(0) flushes the internal callback queue without blocking.
+        # Calling it periodically prevents the internal buffer from growing unbounded
+        # when producing thousands of messages without waiting for acknowledgements.
         if sent % 100 == 0:
             producer.poll(0)
+    # flush() blocks until all buffered messages are delivered or an error occurs.
+    # Always call this before the program exits to avoid silently dropping messages.
     producer.flush()
     return sent
 

@@ -56,6 +56,10 @@ def build_spark() -> SparkSession:
         .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        # shuffle.partitions controls how many files Spark creates during joins/aggregations.
+        # The default is 200, which creates 200 tiny files for small datasets — very inefficient.
+        # Set it to 2-4x the number of CPU cores for local dev. For a 100GB+ dataset,
+        # tune this to roughly dataset_size_MB / 128.
         .config("spark.sql.shuffle.partitions", "8")
         .config("spark.databricks.delta.optimizeWrite.enabled", "true")
     )
@@ -72,6 +76,11 @@ def read_bronze(spark: SparkSession, partition_date: str) -> DataFrame:
 
 def deduplicate(df: DataFrame) -> DataFrame:
     """Keep the latest record per (appointment_id, event_type) by kafka_offset."""
+    # A window function assigns a row number within each (appointment_id, event_type) group,
+    # ordered so that the highest kafka_offset (most recently produced message) gets row 1.
+    # We then filter to row 1 only, which is equivalent to "keep the latest duplicate."
+    # kafka_offset is a better dedup key than event_timestamp because it's monotonically
+    # increasing per partition and set by the broker — it can't be faked or clock-skewed.
     window = Window.partitionBy("appointment_id", "event_type").orderBy(
         F.col("kafka_offset").desc()
     )
@@ -85,7 +94,10 @@ def deduplicate(df: DataFrame) -> DataFrame:
 def cast_and_clean(df: DataFrame) -> DataFrame:
     return (
         df
-        # Timestamps from epoch millis
+        # Convert epoch milliseconds → proper Spark TimestampType.
+        # Division by 1000 converts ms → seconds, then cast() handles the rest.
+        # Storing timestamps as proper types (not strings/longs) lets Spark push date
+        # predicates down to the file reader, which dramatically speeds up range queries.
         .withColumn(
             "event_timestamp_ts",
             (F.col("event_timestamp") / 1000).cast(TimestampType()),
@@ -94,22 +106,29 @@ def cast_and_clean(df: DataFrame) -> DataFrame:
             "scheduled_start_ts",
             (F.col("scheduled_start_ts") / 1000).cast(TimestampType()),
         )
-        # Normalize string enums to uppercase
+        # Normalize enums to uppercase so downstream joins don't break on case differences.
+        # trim() strips accidental whitespace that sometimes leaks from source systems.
         .withColumn("event_type", F.upper(F.trim(F.col("event_type"))))
         .withColumn("appointment_type", F.upper(F.trim(F.col("appointment_type"))))
+        # coalesce fills nulls with a sentinel value so downstream GROUP BYs don't silently
+        # drop null rows. "UNKNOWN" is explicit and queryable; NULL would be invisible.
         .withColumn(
             "insurance_type",
             F.upper(F.trim(F.coalesce(F.col("insurance_type"), F.lit("UNKNOWN")))),
         )
-        # Defensive casts
+        # Defensive casts: even though the bronze schema specifies types, in practice
+        # schema evolution can leave columns as StringType after a merge. These casts
+        # make silver the authoritative typed layer.
         .withColumn(
             "scheduled_duration_minutes", F.col("scheduled_duration_minutes").cast(IntegerType())
         )
         .withColumn("copay_amount_usd", F.col("copay_amount_usd").cast(FloatType()))
         .withColumn("lead_time_hours", F.col("lead_time_hours").cast(IntegerType()))
-        # Null-safe booleans
+        # coalesce(bool_col, False) makes booleans null-safe: ML models can't handle NULL
+        # in feature columns and will either crash or silently drop the row.
         .withColumn("is_reminder_sent", F.coalesce(F.col("is_reminder_sent"), F.lit(False)))
-        # Drop kafka internals from silver layer
+        # Kafka metadata (partition, offset) is only meaningful for the bronze layer.
+        # Carrying it forward to silver increases storage cost with no analytical value.
         .drop("kafka_key", "kafka_partition", "kafka_offset", "kafka_timestamp")
     )
 
@@ -159,12 +178,18 @@ def add_derived_columns(df: DataFrame) -> DataFrame:
 
 def tag_data_quality(df: DataFrame) -> DataFrame:
     """Tag rows with _dq_passed = False if they fail basic quality rules."""
+    # We TAG failures rather than DROP them. This preserves the full audit trail in silver:
+    # bad rows are still there for investigation, but the dbt staging model filters
+    # `WHERE _dq_passed = true` so they never reach gold or the feature store.
+    # This "soft fail" pattern lets you diagnose upstream data quality issues without
+    # silently losing data.
     return df.withColumn(
         "_dq_passed",
         F.col("appointment_id").isNotNull()
         & F.col("patient_id").isNotNull()
         & F.col("provider_id").isNotNull()
         & F.col("event_type").isin("SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW")
+        # A duration of <5 min or >8 hours (480 min) is almost certainly a data error.
         & F.col("scheduled_duration_minutes").between(5, 480),
     )
 
@@ -172,7 +197,8 @@ def tag_data_quality(df: DataFrame) -> DataFrame:
 def merge_to_silver(spark: SparkSession, silver_df: DataFrame, partition_date: str) -> None:
     """Upsert into the silver Delta table on (appointment_id, event_type)."""
     if not DeltaTable.isDeltaTable(spark, SILVER_PATH):
-        # First run — create the table
+        # First run — bootstrap the table. On subsequent runs, we use MERGE instead of
+        # overwrite so that partitions from other dates aren't erased.
         (
             silver_df.write.format("delta")
             .mode("overwrite")
@@ -182,6 +208,10 @@ def merge_to_silver(spark: SparkSession, silver_df: DataFrame, partition_date: s
         return
 
     silver_table = DeltaTable.forPath(spark, SILVER_PATH)
+    # Delta MERGE is the equivalent of SQL MERGE / UPSERT.
+    # The match key is (appointment_id, event_type) — one row per appointment event type.
+    # This makes the silver layer idempotent: re-running for the same date overwrites
+    # existing rows rather than appending duplicates, so Airflow retries are safe.
     (
         silver_table.alias("target")
         .merge(

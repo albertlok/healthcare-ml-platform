@@ -93,6 +93,9 @@ def split(params: dict) -> None:
     df = pd.read_parquet(FEAT_PATH)
     split_params = params["split"]
 
+    # Drop non-feature columns. patient_id and appointment_id are identifiers —
+    # they would cause data leakage if left in (the model would memorize patients).
+    # feature_timestamp is the point-in-time marker used by Feast, not a real feature.
     X = df.drop(
         columns=["label", "patient_id", "appointment_id", "feature_timestamp"], errors="ignore"
     )
@@ -103,8 +106,13 @@ def split(params: dict) -> None:
         y,
         test_size=split_params["test_size"],
         random_state=split_params["random_state"],
+        # stratify=y ensures the same class ratio (no-show %) in train, val, and test.
+        # Without this, a small test set could accidentally have 0% no-shows, making
+        # metrics meaningless. Always stratify for imbalanced classification problems.
         stratify=y if split_params["stratify"] else None,
     )
+    # Split the remaining trainval into train + val, adjusting the fraction so the
+    # final val set is the right absolute size relative to the whole dataset.
     val_frac = split_params["val_size"] / (1 - split_params["test_size"])
     X_train, X_val, y_train, y_val = train_test_split(
         X_trainval,
@@ -149,20 +157,33 @@ def train(params: dict) -> None:
 
         booster = xgb.train(
             params={
+                # binary:logistic outputs probabilities [0, 1] — we then apply a threshold
+                # to get a hard prediction. This is better than binary:hinge which outputs
+                # class labels directly, because it lets us tune the threshold separately.
                 "objective": "binary:logistic",
                 "eval_metric": model_params["eval_metric"],
                 "max_depth": model_params["max_depth"],
                 "learning_rate": model_params["learning_rate"],
+                # subsample + colsample_bytree are regularization params that randomly
+                # sample rows and columns per tree. They reduce overfitting and speed up
+                # training. Values in [0.6, 0.9] are common starting points.
                 "subsample": model_params["subsample"],
                 "colsample_bytree": model_params["colsample_bytree"],
                 "min_child_weight": model_params["min_child_weight"],
+                # scale_pos_weight handles class imbalance: set to (num_negative / num_positive)
+                # to give more weight to the minority class (no-shows). Without this, the model
+                # would learn to always predict "showed up" and still get ~95% accuracy.
                 "scale_pos_weight": model_params["scale_pos_weight"],
+                # L1 (alpha) and L2 (lambda) regularization reduce overfitting by penalizing
+                # large leaf weights. Increase if the model is overfit on training data.
                 "reg_alpha": model_params["reg_alpha"],
                 "reg_lambda": model_params["reg_lambda"],
                 "seed": 42,
             },
             dtrain=dtrain,
             num_boost_round=model_params["n_estimators"],
+            # early_stopping_rounds: stop training if val metric doesn't improve for N rounds.
+            # This prevents overfitting and reduces training time without sacrificing accuracy.
             evals=[(dtrain, "train"), (dval, "val")],
             early_stopping_rounds=model_params["early_stopping_rounds"],
             verbose_eval=50,

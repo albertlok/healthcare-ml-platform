@@ -69,6 +69,11 @@ app.add_middleware(
 )
 
 # ── Lazy-loaded singletons ────────────────────────────────────────────────────
+# These module-level variables are initialized on first use rather than at import time.
+# Why lazy? The embedding model (~80MB) takes a few seconds to load. If we loaded it
+# at startup, every cold start (Lambda, container restart) would be slow.
+# With lazy loading, the first request is slow but subsequent requests reuse the cached
+# object. In production, consider preloading via FastAPI's lifespan hook instead.
 _chroma_client: chromadb.HttpClient | None = None
 _collection: chromadb.Collection | None = None
 _embed_model: SentenceTransformer | None = None
@@ -77,6 +82,9 @@ _feature_names: list[str] | None = None
 
 
 def get_chroma() -> chromadb.Collection:
+    # Module-level globals are shared across all requests in a single process.
+    # This is the simplest form of connection pooling — one ChromaDB connection
+    # is created and reused, rather than a new one per request.
     global _chroma_client, _collection
     if _collection is None:
         _chroma_client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
@@ -173,6 +181,10 @@ def query(request: QueryRequest) -> QueryResponse:
         {"patient_id": {"$eq": request.filter_patient_id}} if request.filter_patient_id else None
     )
 
+    # ChromaDB ANN (Approximate Nearest Neighbor) search returns the top_k most
+    # semantically similar documents to the query embedding. The search is approximate
+    # (uses HNSW index) so it's fast (<10ms) but may occasionally miss the true nearest
+    # neighbor. For medical applications needing exact results, use exact=True (slower).
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=request.top_k,
@@ -196,6 +208,9 @@ def query(request: QueryRequest) -> QueryResponse:
         RetrievedDocument(
             id=d["id"],
             text=d["document"],
+            # Convert cosine distance [0, 2] to similarity score [0, 1].
+            # distance=0 means identical; distance=2 means opposite.
+            # score = 1 - distance maps this to 1 (identical) → 0 (opposite).
             score=round(1 - d["distance"], 4),
             patient_id=d["metadata"].get("patient_id"),
             chief_complaint=d["metadata"].get("chief_complaint"),
