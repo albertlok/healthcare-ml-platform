@@ -27,7 +27,7 @@ from delta.tables import DeltaTable
 from dotenv import load_dotenv
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import BooleanType, FloatType, IntegerType, StringType, TimestampType
+from pyspark.sql.types import FloatType, TimestampType
 from pyspark.sql.window import Window
 
 load_dotenv()
@@ -95,7 +95,9 @@ def prepare_incoming(df: DataFrame) -> DataFrame:
             F.upper(F.trim(F.col("preferred_communication_channel"))),
         )
         .withColumn("distance_to_clinic_miles", F.col("distance_to_clinic_miles").cast(FloatType()))
-        .withColumn("has_chronic_condition", F.coalesce(F.col("has_chronic_condition"), F.lit(False)))
+        .withColumn(
+            "has_chronic_condition", F.coalesce(F.col("has_chronic_condition"), F.lit(False))
+        )
         # Add SCD2 control columns
         .withColumn("valid_from", F.col("event_timestamp_ts"))
         .withColumn("valid_to", F.lit(HIGH_WATERMARK_TS).cast(TimestampType()))
@@ -130,21 +132,14 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
 
     if not DeltaTable.isDeltaTable(spark, SILVER_PATH):
         # First load — write all incoming as current rows
-        (
-            incoming.write.format("delta")
-            .mode("overwrite")
-            .partitionBy("state")
-            .save(SILVER_PATH)
-        )
+        (incoming.write.format("delta").mode("overwrite").partitionBy("state").save(SILVER_PATH))
         print(f"Silver patients table created at {SILVER_PATH}")
         return
 
     silver_table = DeltaTable.forPath(spark, SILVER_PATH)
 
     # Build a change-detection expression: any tracked column differs
-    change_condition = " OR ".join(
-        [f"target.{c} != source.{c}" for c in tracked_cols]
-    )
+    change_condition = " OR ".join([f"target.{c} != source.{c}" for c in tracked_cols])
 
     # Step 1: Close stale current rows that have changed
     silver_table.alias("target").merge(
@@ -166,7 +161,7 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
     existing_current = (
         spark.read.format("delta")
         .load(SILVER_PATH)
-        .filter(F.col("is_current") == True)
+        .filter(F.col("is_current"))
         .select("patient_id")
     )
 
@@ -179,12 +174,7 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
     )
 
     if to_insert.count() > 0:
-        (
-            to_insert.write.format("delta")
-            .mode("append")
-            .partitionBy("state")
-            .save(SILVER_PATH)
-        )
+        (to_insert.write.format("delta").mode("append").partitionBy("state").save(SILVER_PATH))
 
     print("SCD2 merge complete.")
 

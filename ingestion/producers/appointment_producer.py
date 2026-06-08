@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import random
 import time
@@ -44,8 +43,14 @@ BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081")
 
 APPOINTMENT_TYPES = [
-    "NEW_PATIENT", "FOLLOW_UP", "ANNUAL_WELLNESS", "URGENT_CARE",
-    "TELEHEALTH", "SPECIALIST_REFERRAL", "PROCEDURE", "LAB_REVIEW",
+    "NEW_PATIENT",
+    "FOLLOW_UP",
+    "ANNUAL_WELLNESS",
+    "URGENT_CARE",
+    "TELEHEALTH",
+    "SPECIALIST_REFERRAL",
+    "PROCEDURE",
+    "LAB_REVIEW",
 ]
 EVENT_TYPES = ["SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"]
 EVENT_TYPE_WEIGHTS = [0.55, 0.10, 0.12, 0.18, 0.05]
@@ -53,8 +58,13 @@ EVENT_TYPE_WEIGHTS = [0.55, 0.10, 0.12, 0.18, 0.05]
 INSURANCE_TYPES = ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "TRICARE"]
 REMINDER_CHANNELS = ["SMS", "EMAIL", "PHONE"]
 CANCELLATION_REASONS = [
-    "PATIENT_REQUEST", "PROVIDER_UNAVAILABLE", "EMERGENCY",
-    "TRANSPORTATION", "WORK_CONFLICT", "FORGOT", "WEATHER",
+    "PATIENT_REQUEST",
+    "PROVIDER_UNAVAILABLE",
+    "EMERGENCY",
+    "TRANSPORTATION",
+    "WORK_CONFLICT",
+    "FORGOT",
+    "WEATHER",
 ]
 
 # Stable pool of 500 patients and 50 providers for referential consistency
@@ -95,9 +105,7 @@ def _build_appointment_event(
         "insurance_type": random.choice(INSURANCE_TYPES) if random.random() > 0.05 else None,
         "copay_amount_usd": round(random.uniform(0, 75), 2) if random.random() > 0.2 else None,
         "cancellation_reason": (
-            random.choice(CANCELLATION_REASONS)
-            if event_type in ("CANCELLED", "NO_SHOW")
-            else None
+            random.choice(CANCELLATION_REASONS) if event_type in ("CANCELLED", "NO_SHOW") else None
         ),
         "lead_time_hours": lead_time_hours if scheduled_offset_days > 0 else None,
         "metadata": {
@@ -163,8 +171,12 @@ def produce_events(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Synthetic appointment event producer")
-    parser.add_argument("--duration", type=int, default=0, help="Produce for N seconds (0 = use --count)")
-    parser.add_argument("--count", type=int, default=100, help="Events per batch (or total if --once)")
+    parser.add_argument(
+        "--duration", type=int, default=0, help="Produce for N seconds (0 = use --count)"
+    )
+    parser.add_argument(
+        "--count", type=int, default=100, help="Events per batch (or total if --once)"
+    )
     parser.add_argument("--once", action="store_true", help="Produce one batch and exit")
     parser.add_argument("--rate", type=int, default=10, help="Events per second in streaming mode")
     args = parser.parse_args()

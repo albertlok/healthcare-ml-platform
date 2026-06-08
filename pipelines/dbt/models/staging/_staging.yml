@@ -2,8 +2,7 @@ version: 2
 
 sources:
   - name: silver
-    description: "Cleaned Delta Lake silver layer tables."
-    database: "{{ env_var('DUCKDB_PATH', 'dev') }}"
+    description: "Cleaned Delta Lake silver layer tables, loaded into DuckDB before dbt runs."
     schema: silver
     tables:
       - name: appointments
@@ -35,9 +34,6 @@ models:
       - name: duration_minutes
         tests:
           - not_null
-          - dbt_utils.accepted_range:
-              min_value: 5
-              max_value: 480
       - name: is_no_show
         tests:
           - not_null

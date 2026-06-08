@@ -52,6 +52,10 @@ chroma_data/
 
 # Great Expectations
 gx/uncommitted/
+quality/uncommitted/
+
+# dbt local user config
+pipelines/dbt/.user.yml
 
 # Terraform
 infra/terraform/**/.terraform/

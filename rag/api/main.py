@@ -115,6 +115,7 @@ def _build_answer(query: str, docs: list[dict]) -> str:
     if api_key:
         try:
             import anthropic
+
             client = anthropic.Anthropic(api_key=api_key)
             message = client.messages.create(
                 model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
@@ -124,9 +125,7 @@ def _build_answer(query: str, docs: list[dict]) -> str:
                     "the provided clinical note excerpts. Be concise (2-3 sentences). "
                     "Do not invent information not present in the notes."
                 ),
-                messages=[
-                    {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
-                ],
+                messages=[{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}],
             )
             return message.content[0].text
         except Exception as e:
@@ -141,6 +140,7 @@ def _build_answer(query: str, docs: list[dict]) -> str:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
@@ -170,9 +170,7 @@ def query(request: QueryRequest) -> QueryResponse:
     query_embedding = model.encode(request.query).tolist()
 
     where_filter = (
-        {"patient_id": {"$eq": request.filter_patient_id}}
-        if request.filter_patient_id
-        else None
+        {"patient_id": {"$eq": request.filter_patient_id}} if request.filter_patient_id else None
     )
 
     results = collection.query(
@@ -222,7 +220,7 @@ def patient_risk(patient_id: str) -> PatientRiskResponse:
 
     # Retrieve this patient's clinical notes
     results = collection.query(
-        query_embeddings=[model.encode(f"patient risk factors no-show history").tolist()],
+        query_embeddings=[model.encode("patient risk factors no-show history").tolist()],
         n_results=3,
         where={"patient_id": {"$eq": patient_id}},
         include=["documents", "metadatas", "distances"],
@@ -234,10 +232,7 @@ def patient_risk(patient_id: str) -> PatientRiskResponse:
     notes_context = " ".join(results["documents"][0])
 
     # Build a risk summary from context
-    risk_scores = [
-        float(m.get("no_show_risk", 0.5))
-        for m in results["metadatas"][0]
-    ]
+    risk_scores = [float(m.get("no_show_risk", 0.5)) for m in results["metadatas"][0]]
     avg_risk = sum(risk_scores) / len(risk_scores) if risk_scores else 0.5
 
     risk_tier = "LOW" if avg_risk < 0.3 else "MEDIUM" if avg_risk < 0.6 else "HIGH"
@@ -261,7 +256,7 @@ def patient_risk(patient_id: str) -> PatientRiskResponse:
     }[risk_tier]
 
     summary = _build_answer(
-        f"Summarize this patient's no-show risk factors in 2 sentences.",
+        "Summarize this patient's no-show risk factors in 2 sentences.",
         [{"document": notes_context}],
     )
 
@@ -288,10 +283,12 @@ def embed_note(request: EmbedRequest) -> EmbedResponse:
         ids=[doc_id],
         embeddings=[embedding],
         documents=[request.note_text],
-        metadatas=[{
-            "patient_id": request.patient_id,
-            "appointment_id": request.appointment_id,
-        }],
+        metadatas=[
+            {
+                "patient_id": request.patient_id,
+                "appointment_id": request.appointment_id,
+            }
+        ],
     )
 
     log.info("note_embedded", doc_id=doc_id, patient_id=request.patient_id)

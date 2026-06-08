@@ -11,7 +11,7 @@ version: "3.9"
 #   kafka-ui          — Browser UI for Kafka  :8080
 #   postgres          — Airflow + MLflow metadata DB
 #   airflow-init      — DB migrations + admin user seed
-#   airflow-webserver — Airflow UI              :8081
+#   airflow-webserver — Airflow UI              :8088
 #   airflow-scheduler — DAG scheduler
 #   airflow-worker    — Celery task worker
 #   redis             — Celery broker for Airflow
@@ -19,7 +19,7 @@ version: "3.9"
 #   minio-init        — Bucket provisioning
 #   spark-master      — Spark standalone master  :8082
 #   spark-worker      — Spark worker node
-#   mlflow            — Experiment tracking UI   :5000
+#   mlflow            — Experiment tracking UI   :5001
 #   chromadb          — Vector database          :8000
 # ─────────────────────────────────────────────
 
@@ -36,10 +36,11 @@ x-airflow-common: &airflow-common
     AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+    _PIP_ADDITIONAL_REQUIREMENTS: "structlog apache-airflow-providers-apache-spark==4.10.0 apache-airflow-providers-slack great-expectations==0.18.19 deltalake dbt-core dbt-duckdb feast evidently"
     # Pass all project env vars into Airflow containers
-    KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
-    SCHEMA_REGISTRY_URL: ${SCHEMA_REGISTRY_URL:-http://schema-registry:8081}
-    MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+    KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    MINIO_ENDPOINT: http://minio:9000
     MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
     MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     DELTA_LAKE_PATH: ${DELTA_LAKE_PATH:-s3a://healthcare}
@@ -48,15 +49,17 @@ x-airflow-common: &airflow-common
     SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
     DUCKDB_PATH: ${DUCKDB_PATH:-/opt/airflow/data/dev.duckdb}
     FEAST_REPO_PATH: ${FEAST_REPO_PATH:-/opt/airflow/feature_store/feature_repo}
-    MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+    MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5001}
     CHROMA_HOST: ${CHROMA_HOST:-chromadb}
     CHROMA_PORT: ${CHROMA_PORT:-8000}
   volumes:
     - ./orchestration/dags:/opt/airflow/dags
+    - ./ingestion:/opt/airflow/ingestion
     - ./pipelines:/opt/airflow/pipelines
     - ./feature_store:/opt/airflow/feature_store
     - ./ml:/opt/airflow/ml
     - ./data:/opt/airflow/data
+    - ./quality:/opt/airflow/quality
     - airflow-logs:/opt/airflow/logs
     - airflow-plugins:/opt/airflow/plugins
   user: "${AIRFLOW_UID:-50000}:0"
@@ -223,7 +226,7 @@ services:
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "mc", "ready", "local"]
       interval: 30s
       timeout: 20s
       retries: 3
@@ -278,7 +281,7 @@ services:
     container_name: airflow-webserver
     command: webserver
     ports:
-      - "8081:8080"
+      - "8088:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
@@ -342,14 +345,18 @@ services:
 
   # ── Spark ──────────────────────────────────
   spark-master:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.3
     container_name: spark-master
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8082"
     environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
       SPARK_MASTER_WEBUI_PORT: 8082
       AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
@@ -358,20 +365,20 @@ services:
       - "8082:8082"   # Spark master UI
     volumes:
       - ./pipelines:/opt/pipelines
-      - spark-data:/opt/bitnami/spark/work
+      - spark-data:/opt/spark/work-dir
 
   spark-worker:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.3
     container_name: spark-worker
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
     depends_on:
       - spark-master
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
       SPARK_WORKER_MEMORY: 2G
       SPARK_WORKER_CORES: 2
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
       AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
@@ -387,17 +394,18 @@ services:
       minio:
         condition: service_healthy
     ports:
-      - "5000:5000"
+      - "5001:5001"
     environment:
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-    command: >
+    entrypoint: >
+      /bin/sh -c "pip install psycopg2-binary boto3 --quiet &&
       mlflow server
       --backend-store-uri postgresql://airflow:airflow@postgres/mlflow
       --default-artifact-root s3://mlflow-artifacts/
       --host 0.0.0.0
-      --port 5000
+      --port 5001"
 
   # ── ChromaDB (Vector Store) ────────────────
   chromadb:

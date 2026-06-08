@@ -1,9 +1,8 @@
-#!/bin/bash
+#!/bin/sh
 # Creates additional databases (mlflow) alongside the primary airflow DB.
 set -e
-
-function create_database() {
-    local database=$1
+create_database() {
+    database="$1"
     echo "Creating database: $database"
     psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
         CREATE DATABASE $database;

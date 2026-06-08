@@ -17,19 +17,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import mlflow
 import mlflow.xgboost
-import numpy as np
 import pandas as pd
 import structlog
 import xgboost as xgb
 import yaml
 from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 
 load_dotenv()
 
@@ -46,7 +43,7 @@ TRAIN_METRICS_PATH = Path("reports/train_metrics.json")
 RUN_ID_PATH = Path("models/mlflow_run_id.txt")
 
 FEAST_REPO_PATH = os.getenv("FEAST_REPO_PATH", "./feature_store/feature_repo")
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 MLFLOW_EXPERIMENT = os.getenv("MLFLOW_EXPERIMENT_NAME", "patient-no-show")
 
 
@@ -96,18 +93,22 @@ def split(params: dict) -> None:
     df = pd.read_parquet(FEAT_PATH)
     split_params = params["split"]
 
-    X = df.drop(columns=["label", "patient_id", "appointment_id", "feature_timestamp"], errors="ignore")
+    X = df.drop(
+        columns=["label", "patient_id", "appointment_id", "feature_timestamp"], errors="ignore"
+    )
     y = df["label"].astype(int)
 
     X_trainval, X_test, y_trainval, y_test = train_test_split(
-        X, y,
+        X,
+        y,
         test_size=split_params["test_size"],
         random_state=split_params["random_state"],
         stratify=y if split_params["stratify"] else None,
     )
     val_frac = split_params["val_size"] / (1 - split_params["test_size"])
     X_train, X_val, y_train, y_val = train_test_split(
-        X_trainval, y_trainval,
+        X_trainval,
+        y_trainval,
         test_size=val_frac,
         random_state=split_params["random_state"],
         stratify=y_trainval if split_params["stratify"] else None,
