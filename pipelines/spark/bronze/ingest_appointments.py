@@ -103,9 +103,7 @@ def run() -> None:
     )
 
     # Strip Confluent magic byte (1 byte) + schema ID (4 bytes) before Avro parsing
-    stripped = raw_stream.withColumn(
-        "avro_value", F.expr("substring(value, 6, length(value) - 5)")
-    )
+    stripped = raw_stream.withColumn("avro_value", F.expr("substring(value, 6, length(value) - 5)"))
 
     # Deserialize Avro payload
     parsed = stripped.select(
@@ -143,7 +141,7 @@ def run() -> None:
         .option("checkpointLocation", CHECKPOINT_PATH)
         .option("mergeSchema", "true")
         .partitionBy("_partition_date")
-        .trigger(processingTime="60 seconds")   # micro-batch every 60s
+        .trigger(processingTime="60 seconds")  # micro-batch every 60s
         .start(BRONZE_PATH)
     )
 

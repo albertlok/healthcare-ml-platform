@@ -41,7 +41,15 @@ SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081")
 GENDERS = ["MALE", "FEMALE", "NON_BINARY", "PREFER_NOT_TO_SAY", "UNKNOWN"]
 GENDER_WEIGHTS = [0.47, 0.48, 0.02, 0.02, 0.01]
 
-INSURANCE_TYPES = ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "WORKERS_COMP", "TRICARE", "UNKNOWN"]
+INSURANCE_TYPES = [
+    "COMMERCIAL",
+    "MEDICARE",
+    "MEDICAID",
+    "SELF_PAY",
+    "WORKERS_COMP",
+    "TRICARE",
+    "UNKNOWN",
+]
 INSURANCE_WEIGHTS = [0.45, 0.25, 0.18, 0.07, 0.02, 0.02, 0.01]
 
 COMM_CHANNELS = ["SMS", "EMAIL", "PHONE", "PORTAL"]
@@ -56,11 +64,56 @@ REG_SOURCE_WEIGHTS = [0.30, 0.25, 0.25, 0.15, 0.05]
 _EPOCH = date(1970, 1, 1)
 
 US_STATES = [
-    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+    "AL",
+    "AK",
+    "AZ",
+    "AR",
+    "CA",
+    "CO",
+    "CT",
+    "DE",
+    "FL",
+    "GA",
+    "HI",
+    "ID",
+    "IL",
+    "IN",
+    "IA",
+    "KS",
+    "KY",
+    "LA",
+    "ME",
+    "MD",
+    "MA",
+    "MI",
+    "MN",
+    "MS",
+    "MO",
+    "MT",
+    "NE",
+    "NV",
+    "NH",
+    "NJ",
+    "NM",
+    "NY",
+    "NC",
+    "ND",
+    "OH",
+    "OK",
+    "OR",
+    "PA",
+    "RI",
+    "SC",
+    "SD",
+    "TN",
+    "TX",
+    "UT",
+    "VT",
+    "VA",
+    "WA",
+    "WV",
+    "WI",
+    "WY",
 ]
 
 
@@ -100,7 +153,9 @@ def _build_patient_event(patient_id: str | None = None) -> dict[str, Any]:
             weights=[0.75, 0.12, 0.04, 0.03, 0.02, 0.02, 0.02],
         )[0],
         "preferred_communication_channel": random.choices(COMM_CHANNELS, weights=COMM_WEIGHTS)[0],
-        "distance_to_clinic_miles": round(random.uniform(0.5, 50.0), 1) if random.random() > 0.05 else None,
+        "distance_to_clinic_miles": (
+            round(random.uniform(0.5, 50.0), 1) if random.random() > 0.05 else None
+        ),
         "has_chronic_condition": random.random() > 0.65,
         "registration_source": random.choices(REG_SOURCES, weights=REG_SOURCE_WEIGHTS)[0],
     }

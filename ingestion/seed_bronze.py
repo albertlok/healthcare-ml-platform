@@ -35,9 +35,25 @@ STORAGE_OPTIONS = {
     "region": "us-east-1",
 }
 
-INSURANCE_TYPES = ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "WORKERS_COMP", "TRICARE", "UNKNOWN"]
-APPOINTMENT_TYPES = ["NEW_PATIENT", "FOLLOW_UP", "ANNUAL_WELLNESS", "URGENT_CARE",
-                     "TELEHEALTH", "SPECIALIST_REFERRAL", "PROCEDURE", "LAB_REVIEW"]
+INSURANCE_TYPES = [
+    "COMMERCIAL",
+    "MEDICARE",
+    "MEDICAID",
+    "SELF_PAY",
+    "WORKERS_COMP",
+    "TRICARE",
+    "UNKNOWN",
+]
+APPOINTMENT_TYPES = [
+    "NEW_PATIENT",
+    "FOLLOW_UP",
+    "ANNUAL_WELLNESS",
+    "URGENT_CARE",
+    "TELEHEALTH",
+    "SPECIALIST_REFERRAL",
+    "PROCEDURE",
+    "LAB_REVIEW",
+]
 EVENT_TYPES = ["SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"]
 GENDERS = ["MALE", "FEMALE", "NON_BINARY", "PREFER_NOT_TO_SAY"]
 COMM_CHANNELS = ["SMS", "EMAIL", "PHONE", "PORTAL"]
@@ -56,22 +72,24 @@ def make_appointments(n: int) -> pd.DataFrame:
         sched_offset = timedelta(days=random.randint(-180, 30), hours=random.randint(0, 23))
         scheduled_start = NOW + sched_offset
         event_type = random.choices(EVENT_TYPES, weights=[55, 10, 12, 18, 5])[0]
-        rows.append({
-            "event_id": str(uuid.uuid4()),
-            "event_type": event_type,
-            "event_timestamp": int(NOW.timestamp() * 1000),
-            "appointment_id": str(uuid.uuid4()),
-            "patient_id": random.choice(PATIENT_POOL),
-            "provider_id": random.choice(PROVIDER_POOL),
-            "clinic_id": random.choice(CLINIC_POOL),
-            "appointment_type": random.choice(APPOINTMENT_TYPES),
-            "scheduled_start_ts": int(scheduled_start.timestamp() * 1000),
-            "scheduled_duration_minutes": random.choice([15, 20, 30, 45, 60]),
-            "is_reminder_sent": random.random() > 0.3,
-            "insurance_type": random.choice(INSURANCE_TYPES),
-            "lead_time_hours": random.randint(1, 720),
-            "ingestion_date": NOW.date().isoformat(),
-        })
+        rows.append(
+            {
+                "event_id": str(uuid.uuid4()),
+                "event_type": event_type,
+                "event_timestamp": int(NOW.timestamp() * 1000),
+                "appointment_id": str(uuid.uuid4()),
+                "patient_id": random.choice(PATIENT_POOL),
+                "provider_id": random.choice(PROVIDER_POOL),
+                "clinic_id": random.choice(CLINIC_POOL),
+                "appointment_type": random.choice(APPOINTMENT_TYPES),
+                "scheduled_start_ts": int(scheduled_start.timestamp() * 1000),
+                "scheduled_duration_minutes": random.choice([15, 20, 30, 45, 60]),
+                "is_reminder_sent": random.random() > 0.3,
+                "insurance_type": random.choice(INSURANCE_TYPES),
+                "lead_time_hours": random.randint(1, 720),
+                "ingestion_date": NOW.date().isoformat(),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -80,28 +98,36 @@ def make_patients() -> pd.DataFrame:
     for patient_id in PATIENT_POOL:
         dob_offset = timedelta(days=random.randint(365 * 18, 365 * 85))
         dob = (NOW - dob_offset).date()
-        rows.append({
-            "event_id": str(uuid.uuid4()),
-            "event_type": "REGISTERED",
-            "event_timestamp": int((NOW - timedelta(days=random.randint(0, 730))).timestamp() * 1000),
-            "patient_id": patient_id,
-            "date_of_birth": (dob - datetime(1970, 1, 1, tzinfo=timezone.utc).date()).days,
-            "gender": random.choice(GENDERS),
-            "zip_code": f"{random.randint(10000, 99999):05d}",
-            "state": random.choice(["CA", "NY", "TX", "FL", "WA", "IL", "PA", "OH"]),
-            "insurance_type": random.choice(INSURANCE_TYPES),
-            "preferred_language": random.choices(["en", "es", "zh", "fr"], weights=[80, 10, 5, 5])[0],
-            "preferred_communication_channel": random.choice(COMM_CHANNELS),
-            "distance_to_clinic_miles": round(random.uniform(0.5, 50.0), 2),
-            "has_chronic_condition": random.random() > 0.7,
-            "registration_source": random.choice(REG_SOURCES),
-            "ingestion_date": NOW.date().isoformat(),
-        })
+        rows.append(
+            {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "REGISTERED",
+                "event_timestamp": int(
+                    (NOW - timedelta(days=random.randint(0, 730))).timestamp() * 1000
+                ),
+                "patient_id": patient_id,
+                "date_of_birth": (dob - datetime(1970, 1, 1, tzinfo=timezone.utc).date()).days,
+                "gender": random.choice(GENDERS),
+                "zip_code": f"{random.randint(10000, 99999):05d}",
+                "state": random.choice(["CA", "NY", "TX", "FL", "WA", "IL", "PA", "OH"]),
+                "insurance_type": random.choice(INSURANCE_TYPES),
+                "preferred_language": random.choices(
+                    ["en", "es", "zh", "fr"], weights=[80, 10, 5, 5]
+                )[0],
+                "preferred_communication_channel": random.choice(COMM_CHANNELS),
+                "distance_to_clinic_miles": round(random.uniform(0.5, 50.0), 2),
+                "has_chronic_condition": random.random() > 0.7,
+                "registration_source": random.choice(REG_SOURCES),
+                "ingestion_date": NOW.date().isoformat(),
+            }
+        )
     return pd.DataFrame(rows)
 
 
 def main(appointment_rows: int) -> None:
-    print(f"Generating {appointment_rows} appointment events and {len(PATIENT_POOL)} patient records...")
+    print(
+        f"Generating {appointment_rows} appointment events and {len(PATIENT_POOL)} patient records..."
+    )
 
     appt_df = make_appointments(appointment_rows)
     patient_df = make_patients()
@@ -133,6 +159,8 @@ def main(appointment_rows: int) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rows", type=int, default=2000, help="Number of appointment rows to generate")
+    parser.add_argument(
+        "--rows", type=int, default=2000, help="Number of appointment rows to generate"
+    )
     args = parser.parse_args()
     main(args.rows)

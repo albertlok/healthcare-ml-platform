@@ -96,18 +96,22 @@ def split(params: dict) -> None:
     df = pd.read_parquet(FEAT_PATH)
     split_params = params["split"]
 
-    X = df.drop(columns=["label", "patient_id", "appointment_id", "feature_timestamp"], errors="ignore")
+    X = df.drop(
+        columns=["label", "patient_id", "appointment_id", "feature_timestamp"], errors="ignore"
+    )
     y = df["label"].astype(int)
 
     X_trainval, X_test, y_trainval, y_test = train_test_split(
-        X, y,
+        X,
+        y,
         test_size=split_params["test_size"],
         random_state=split_params["random_state"],
         stratify=y if split_params["stratify"] else None,
     )
     val_frac = split_params["val_size"] / (1 - split_params["test_size"])
     X_train, X_val, y_train, y_val = train_test_split(
-        X_trainval, y_trainval,
+        X_trainval,
+        y_trainval,
         test_size=val_frac,
         random_state=split_params["random_state"],
         stratify=y_trainval if split_params["stratify"] else None,

@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from airflow.decorators import dag, task, task_group
-from airflow.models import Variable, Connection
+from airflow.models import Connection, Variable
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.dates import days_ago
 
@@ -44,6 +44,7 @@ def _maybe_slack_callback(context: Any) -> None:
     except Exception:
         return
     from airflow.providers.slack.notifications.slack_webhook import send_slack_webhook_notification
+
     send_slack_webhook_notification(
         slack_webhook_conn_id="slack_data_alerts",
         text="DAG {{ dag.dag_id }} task {{ task.task_id }} failed at {{ ts }}.",
@@ -69,7 +70,6 @@ MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5001")
 DRIFT_THRESHOLD = float(os.getenv("DRIFT_P_VALUE_THRESHOLD", "0.05"))
 
 
-
 @dag(
     dag_id="patient_risk_pipeline",
     description="End-to-end patient no-show risk data pipeline",
@@ -90,6 +90,7 @@ def patient_risk_pipeline():
         def _read_bronze_delta(table_path: str) -> "pd.DataFrame":
             """Read a Delta table from MinIO into a pandas DataFrame."""
             import os
+
             import pandas as pd
             from deltalake import DeltaTable
 
@@ -155,7 +156,9 @@ def patient_risk_pipeline():
                     for r in val.get("validation_result", {}).get("results", [])
                     if not r["success"]
                 ]
-                raise ValueError(f"Bronze patients DQ failed for {partition_date}. Failures: {failed}")
+                raise ValueError(
+                    f"Bronze patients DQ failed for {partition_date}. Failures: {failed}"
+                )
 
             return {"partition_date": partition_date, "dq_passed": True}
 
@@ -171,6 +174,7 @@ def patient_risk_pipeline():
         def silver_appointments_task(**context: Any) -> dict:
             """Deduplicate and type-cast bronze appointments → silver Delta table."""
             import os
+
             import pandas as pd
             import pyarrow as pa
             from deltalake import DeltaTable, write_deltalake
@@ -188,13 +192,19 @@ def patient_risk_pipeline():
             df = DeltaTable(bronze_path, storage_options=storage_opts).to_pandas()
 
             # Deduplicate: keep latest event per appointment_id
-            df = df.sort_values("event_timestamp", ascending=False).drop_duplicates("appointment_id")
+            df = df.sort_values("event_timestamp", ascending=False).drop_duplicates(
+                "appointment_id"
+            )
 
             # Convert epoch-ms timestamps to UTC-naive strings (DuckDB ::timestamp cast-safe)
-            sched_dt = pd.to_datetime(df["scheduled_start_ts"], unit="ms", utc=True).dt.tz_convert(None)
+            sched_dt = pd.to_datetime(df["scheduled_start_ts"], unit="ms", utc=True).dt.tz_convert(
+                None
+            )
             df["scheduled_start_ts"] = sched_dt.astype(str)
             df["event_timestamp_ts"] = (
-                pd.to_datetime(df["event_timestamp"], unit="ms", utc=True).dt.tz_convert(None).astype(str)
+                pd.to_datetime(df["event_timestamp"], unit="ms", utc=True)
+                .dt.tz_convert(None)
+                .astype(str)
             )
             df["scheduled_at"] = df["scheduled_start_ts"]
             df["scheduled_date"] = sched_dt.dt.date.astype(str)
@@ -228,6 +238,7 @@ def patient_risk_pipeline():
 
             # Not in seed data — typed float NaN; None would give Delta Lake an untyped Null column
             import numpy as np
+
             df["copay_amount_usd"] = np.nan
 
             # Audit
@@ -235,8 +246,13 @@ def patient_risk_pipeline():
             df["_partition_date"] = context["ds"]
             df["_dq_passed"] = True
 
-            write_deltalake(silver_path, pa.Table.from_pandas(df, preserve_index=False),
-                            storage_options=storage_opts, mode="overwrite", schema_mode="overwrite")
+            write_deltalake(
+                silver_path,
+                pa.Table.from_pandas(df, preserve_index=False),
+                storage_options=storage_opts,
+                mode="overwrite",
+                schema_mode="overwrite",
+            )
             log.info("silver_appointments_written", rows=len(df), path=silver_path)
             return {"partition_date": context["ds"], "rows_written": len(df)}
 
@@ -245,6 +261,7 @@ def patient_risk_pipeline():
             """SCD Type 2 merge of bronze patient events → silver Delta table."""
             import os
             from datetime import date, timedelta
+
             import pandas as pd
             import pyarrow as pa
             from deltalake import DeltaTable, write_deltalake
@@ -263,7 +280,9 @@ def patient_risk_pipeline():
 
             # Build SCD2: latest record per patient is current, others are historical
             df["event_ts"] = (
-                pd.to_datetime(df["event_timestamp"], unit="ms", utc=True).dt.tz_convert(None).astype(str)
+                pd.to_datetime(df["event_timestamp"], unit="ms", utc=True)
+                .dt.tz_convert(None)
+                .astype(str)
             )
             df = df.sort_values(["patient_id", "event_timestamp"])
 
@@ -281,13 +300,20 @@ def patient_risk_pipeline():
             )
 
             # Placeholder: not in seed data but expected by staging model
-            df["insurance_plan_name"] = ""  # typed string, not None (avoids Delta Lake Null type error)
+            df["insurance_plan_name"] = (
+                ""  # typed string, not None (avoids Delta Lake Null type error)
+            )
 
             # Audit
             df["_silver_processed_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            write_deltalake(silver_path, pa.Table.from_pandas(df, preserve_index=False),
-                            storage_options=storage_opts, mode="overwrite", schema_mode="overwrite")
+            write_deltalake(
+                silver_path,
+                pa.Table.from_pandas(df, preserve_index=False),
+                storage_options=storage_opts,
+                mode="overwrite",
+                schema_mode="overwrite",
+            )
             log.info("silver_patients_written", rows=len(df), path=silver_path)
             return {"partition_date": context["ds"], "rows_written": len(df)}
 
@@ -300,6 +326,7 @@ def patient_risk_pipeline():
         """Load silver Delta tables into DuckDB, then run dbt gold models and tests."""
         import os
         from pathlib import Path
+
         import duckdb
         from deltalake import DeltaTable
 
@@ -316,8 +343,12 @@ def patient_risk_pipeline():
         }
 
         # Read silver tables from MinIO Delta Lake and load into DuckDB for dbt
-        appts_df = DeltaTable("s3://healthcare/silver/appointments", storage_options=storage_opts).to_pandas()
-        patients_df = DeltaTable("s3://healthcare/silver/patients", storage_options=storage_opts).to_pandas()
+        appts_df = DeltaTable(
+            "s3://healthcare/silver/appointments", storage_options=storage_opts
+        ).to_pandas()
+        patients_df = DeltaTable(
+            "s3://healthcare/silver/patients", storage_options=storage_opts
+        ).to_pandas()
 
         conn = duckdb.connect(duckdb_path)
         conn.execute("CREATE SCHEMA IF NOT EXISTS silver")
@@ -328,17 +359,23 @@ def patient_risk_pipeline():
 
         # In dbt 1.5+, --project-dir and --profiles-dir are subcommand-level options
         dbt_common = [
-            "--project-dir", "/opt/airflow/pipelines/dbt",
-            "--profiles-dir", "/opt/airflow/pipelines/dbt",
-            "--target", "dev",
-            "--vars", f'{{"run_date": "{partition_date}"}}',
+            "--project-dir",
+            "/opt/airflow/pipelines/dbt",
+            "--profiles-dir",
+            "/opt/airflow/pipelines/dbt",
+            "--target",
+            "dev",
+            "--vars",
+            f'{{"run_date": "{partition_date}"}}',
         ]
 
         for subcommand in ("run", "test"):
             extra = ["--select", "+ml_patient_appointment_stats"]
             proc = subprocess.run(
                 ["dbt", subcommand] + dbt_common + extra,
-                capture_output=True, text=True, check=False,
+                capture_output=True,
+                text=True,
+                check=False,
             )
             if proc.returncode != 0:
                 raise RuntimeError(f"dbt {subcommand} failed:\n{proc.stdout}\n{proc.stderr}")
@@ -416,8 +453,10 @@ def patient_risk_pipeline():
             "patient_demographics:distance_to_clinic_miles",
         ]
         entity_df = pd.DataFrame(
-            {"patient_id": reference_df["patient_id"].tolist(),
-             "event_timestamp": [datetime.utcnow()] * len(reference_df)}
+            {
+                "patient_id": reference_df["patient_id"].tolist(),
+                "event_timestamp": [datetime.utcnow()] * len(reference_df),
+            }
         )
         current_df = store.get_historical_features(
             entity_df=entity_df,

@@ -65,47 +65,51 @@ TOPIC_TABLE_MAP = {
 SCHEMA_DIR = Path(__file__).parent.parent / "schemas"
 
 # Avro → Spark schema mappings per topic
-APPOINTMENT_SPARK_SCHEMA = StructType([
-    StructField("event_id", StringType(), False),
-    StructField("event_type", StringType(), False),
-    StructField("event_timestamp", LongType(), False),
-    StructField("appointment_id", StringType(), False),
-    StructField("patient_id", StringType(), False),
-    StructField("provider_id", StringType(), False),
-    StructField("clinic_id", StringType(), False),
-    StructField("appointment_type", StringType(), False),
-    StructField("scheduled_start_ts", LongType(), False),
-    StructField("scheduled_duration_minutes", IntegerType(), False),
-    StructField("is_reminder_sent", BooleanType(), False),
-    StructField("reminder_channels", StringType(), True),   # serialized JSON array
-    StructField("insurance_type", StringType(), True),
-    StructField("copay_amount_usd", FloatType(), True),
-    StructField("cancellation_reason", StringType(), True),
-    StructField("lead_time_hours", IntegerType(), True),
-    StructField("metadata_json", StringType(), True),       # serialized map
-    StructField("_ingested_at", TimestampType(), False),
-    StructField("_partition_date", StringType(), False),
-])
+APPOINTMENT_SPARK_SCHEMA = StructType(
+    [
+        StructField("event_id", StringType(), False),
+        StructField("event_type", StringType(), False),
+        StructField("event_timestamp", LongType(), False),
+        StructField("appointment_id", StringType(), False),
+        StructField("patient_id", StringType(), False),
+        StructField("provider_id", StringType(), False),
+        StructField("clinic_id", StringType(), False),
+        StructField("appointment_type", StringType(), False),
+        StructField("scheduled_start_ts", LongType(), False),
+        StructField("scheduled_duration_minutes", IntegerType(), False),
+        StructField("is_reminder_sent", BooleanType(), False),
+        StructField("reminder_channels", StringType(), True),  # serialized JSON array
+        StructField("insurance_type", StringType(), True),
+        StructField("copay_amount_usd", FloatType(), True),
+        StructField("cancellation_reason", StringType(), True),
+        StructField("lead_time_hours", IntegerType(), True),
+        StructField("metadata_json", StringType(), True),  # serialized map
+        StructField("_ingested_at", TimestampType(), False),
+        StructField("_partition_date", StringType(), False),
+    ]
+)
 
-PATIENT_SPARK_SCHEMA = StructType([
-    StructField("event_id", StringType(), False),
-    StructField("event_type", StringType(), False),
-    StructField("event_timestamp", LongType(), False),
-    StructField("patient_id", StringType(), False),
-    StructField("date_of_birth", IntegerType(), False),     # epoch days
-    StructField("gender", StringType(), False),
-    StructField("zip_code", StringType(), False),
-    StructField("state", StringType(), False),
-    StructField("insurance_type", StringType(), False),
-    StructField("insurance_plan_name", StringType(), True),
-    StructField("preferred_language", StringType(), False),
-    StructField("preferred_communication_channel", StringType(), False),
-    StructField("distance_to_clinic_miles", FloatType(), True),
-    StructField("has_chronic_condition", BooleanType(), False),
-    StructField("registration_source", StringType(), False),
-    StructField("_ingested_at", TimestampType(), False),
-    StructField("_partition_date", StringType(), False),
-])
+PATIENT_SPARK_SCHEMA = StructType(
+    [
+        StructField("event_id", StringType(), False),
+        StructField("event_type", StringType(), False),
+        StructField("event_timestamp", LongType(), False),
+        StructField("patient_id", StringType(), False),
+        StructField("date_of_birth", IntegerType(), False),  # epoch days
+        StructField("gender", StringType(), False),
+        StructField("zip_code", StringType(), False),
+        StructField("state", StringType(), False),
+        StructField("insurance_type", StringType(), False),
+        StructField("insurance_plan_name", StringType(), True),
+        StructField("preferred_language", StringType(), False),
+        StructField("preferred_communication_channel", StringType(), False),
+        StructField("distance_to_clinic_miles", FloatType(), True),
+        StructField("has_chronic_condition", BooleanType(), False),
+        StructField("registration_source", StringType(), False),
+        StructField("_ingested_at", TimestampType(), False),
+        StructField("_partition_date", StringType(), False),
+    ]
+)
 
 TOPIC_SCHEMA_MAP = {
     "dev.healthcare.appointment.scheduled": APPOINTMENT_SPARK_SCHEMA,
@@ -192,7 +196,7 @@ def build_consumer(topics: list[str]) -> tuple[Consumer, dict[str, AvroDeseriali
             "bootstrap.servers": BOOTSTRAP_SERVERS,
             "group.id": CONSUMER_GROUP,
             "auto.offset.reset": "earliest",
-            "enable.auto.commit": False,   # manual commit after Delta write
+            "enable.auto.commit": False,  # manual commit after Delta write
             "max.poll.interval.ms": 300000,
         }
     )

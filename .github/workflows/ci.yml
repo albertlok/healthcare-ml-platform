@@ -111,7 +111,7 @@ jobs:
           cache: pip
 
       - name: Install feast
-        run: pip install "feast[duckdb]>=0.40.0"
+        run: pip install "feast>=0.40.0"
 
       - name: feast apply
         run: |

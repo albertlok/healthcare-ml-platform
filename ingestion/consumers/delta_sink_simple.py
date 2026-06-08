@@ -95,12 +95,14 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
     for topic in TOPICS:
         deserializers[topic] = AvroDeserializer(registry)
 
-    consumer = Consumer({
-        "bootstrap.servers": BOOTSTRAP_SERVERS,
-        "group.id": CONSUMER_GROUP,
-        "auto.offset.reset": "earliest",
-        "enable.auto.commit": False,
-    })
+    consumer = Consumer(
+        {
+            "bootstrap.servers": BOOTSTRAP_SERVERS,
+            "group.id": CONSUMER_GROUP,
+            "auto.offset.reset": "earliest",
+            "enable.auto.commit": False,
+        }
+    )
     consumer.subscribe(list(TOPICS.keys()))
 
     running = [True]

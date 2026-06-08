@@ -69,8 +69,8 @@ class TestFlatten:
 class TestSilverDerivedColumns:
     """Test the column derivation logic used in the silver transform tasks."""
 
-    import pandas as pd
     import numpy as np
+    import pandas as pd
 
     def test_lead_time_category_short(self):
         import pandas as pd

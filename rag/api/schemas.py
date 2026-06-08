@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=5, max_length=500, description="Natural language query")
     top_k: int = Field(default=5, ge=1, le=20, description="Number of documents to retrieve")
-    filter_patient_id: str | None = Field(default=None, description="Restrict retrieval to a specific patient")
+    filter_patient_id: str | None = Field(
+        default=None, description="Restrict retrieval to a specific patient"
+    )
 
 
 class RetrievedDocument(BaseModel):
@@ -38,7 +40,7 @@ class PatientRiskRequest(BaseModel):
 class PatientRiskResponse(BaseModel):
     patient_id: str
     no_show_probability: float
-    risk_tier: str                 # LOW / MEDIUM / HIGH
+    risk_tier: str  # LOW / MEDIUM / HIGH
     top_risk_factors: list[str]
     recommendation: str
     supporting_notes_summary: str  # RAG-generated from clinical notes

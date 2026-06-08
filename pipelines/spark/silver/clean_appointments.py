@@ -102,7 +102,9 @@ def cast_and_clean(df: DataFrame) -> DataFrame:
             F.upper(F.trim(F.coalesce(F.col("insurance_type"), F.lit("UNKNOWN")))),
         )
         # Defensive casts
-        .withColumn("scheduled_duration_minutes", F.col("scheduled_duration_minutes").cast(IntegerType()))
+        .withColumn(
+            "scheduled_duration_minutes", F.col("scheduled_duration_minutes").cast(IntegerType())
+        )
         .withColumn("copay_amount_usd", F.col("copay_amount_usd").cast(FloatType()))
         .withColumn("lead_time_hours", F.col("lead_time_hours").cast(IntegerType()))
         # Null-safe booleans
@@ -162,9 +164,7 @@ def tag_data_quality(df: DataFrame) -> DataFrame:
         F.col("appointment_id").isNotNull()
         & F.col("patient_id").isNotNull()
         & F.col("provider_id").isNotNull()
-        & F.col("event_type").isin(
-            "SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"
-        )
+        & F.col("event_type").isin("SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW")
         & F.col("scheduled_duration_minutes").between(5, 480),
     )
 

@@ -103,17 +103,23 @@ def evaluate() -> None:
     shap_values = explainer.shap_values(X_test.sample(min(500, len(X_test)), random_state=42))
 
     fig, ax = plt.subplots(figsize=(10, 8))
-    shap.summary_plot(shap_values, X_test.sample(min(500, len(X_test)), random_state=42),
-                      show=False, plot_size=None)
+    shap.summary_plot(
+        shap_values,
+        X_test.sample(min(500, len(X_test)), random_state=42),
+        show=False,
+        plot_size=None,
+    )
     plt.tight_layout()
     plt.savefig(SHAP_PATH, dpi=150, bbox_inches="tight")
     plt.close()
 
     # ── Feature importance plot ───────────────────────────────────────────────
     importance = booster.get_score(importance_type="gain")
-    fi_df = pd.DataFrame(
-        list(importance.items()), columns=["feature", "gain"]
-    ).sort_values("gain", ascending=True).tail(20)
+    fi_df = (
+        pd.DataFrame(list(importance.items()), columns=["feature", "gain"])
+        .sort_values("gain", ascending=True)
+        .tail(20)
+    )
 
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.barh(fi_df["feature"], fi_df["gain"], color="#2196F3")
@@ -125,7 +131,9 @@ def evaluate() -> None:
 
     # ── Log to MLflow ─────────────────────────────────────────────────────────
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    train_metrics = json.loads(TRAIN_METRICS_PATH.read_text()) if TRAIN_METRICS_PATH.exists() else {}
+    train_metrics = (
+        json.loads(TRAIN_METRICS_PATH.read_text()) if TRAIN_METRICS_PATH.exists() else {}
+    )
     run_id = train_metrics.get("mlflow_run_id")
 
     if run_id:

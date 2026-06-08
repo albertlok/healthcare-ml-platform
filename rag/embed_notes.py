@@ -34,12 +34,19 @@ COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_CLINICAL_NOTES", "clinical_notes"
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 CHIEF_COMPLAINTS = [
-    "annual wellness visit", "follow-up for hypertension management",
-    "diabetes mellitus type 2 quarterly check", "chest pain evaluation",
-    "routine physical examination", "knee pain", "back pain",
-    "upper respiratory infection", "follow-up for anxiety and depression",
-    "medication refill and review", "post-operative follow-up",
-    "weight management consultation", "sleep disorder evaluation",
+    "annual wellness visit",
+    "follow-up for hypertension management",
+    "diabetes mellitus type 2 quarterly check",
+    "chest pain evaluation",
+    "routine physical examination",
+    "knee pain",
+    "back pain",
+    "upper respiratory infection",
+    "follow-up for anxiety and depression",
+    "medication refill and review",
+    "post-operative follow-up",
+    "weight management consultation",
+    "sleep disorder evaluation",
 ]
 
 ASSESSMENT_TEMPLATES = [
@@ -47,22 +54,26 @@ ASSESSMENT_TEMPLATES = [
     "Vital signs stable. Blood pressure {bp}. Heart rate {hr} bpm. "
     "Patient reports {symptom_duration} of symptoms. "
     "Assessment: {diagnosis}. Plan: {plan}.",
-
     "{age}-year-old {gender} with history of {comorbidity} here for {complaint}. "
     "Patient has {missed} missed appointments in the past 90 days. "
     "Discussed importance of follow-up care. {plan}.",
-
     "Follow-up visit for {comorbidity}. Patient {adherence} to prescribed regimen. "
     "Labs reviewed — {lab_result}. "
     "Patient lives {distance} miles from clinic. Transportation discussed. {plan}.",
 ]
 
 DIAGNOSES = [
-    "Hypertension, well-controlled", "Type 2 diabetes mellitus",
-    "Major depressive disorder", "Generalized anxiety disorder",
-    "Osteoarthritis of the knee", "Chronic low back pain",
-    "Hyperlipidemia", "Obesity (BMI > 30)", "Asthma, mild persistent",
-    "GERD", "Hypothyroidism",
+    "Hypertension, well-controlled",
+    "Type 2 diabetes mellitus",
+    "Major depressive disorder",
+    "Generalized anxiety disorder",
+    "Osteoarthritis of the knee",
+    "Chronic low back pain",
+    "Hyperlipidemia",
+    "Obesity (BMI > 30)",
+    "Asthma, mild persistent",
+    "GERD",
+    "Hypothyroidism",
 ]
 
 PLANS = [
@@ -92,10 +103,15 @@ def generate_clinical_note(patient_id: str, appointment_id: str) -> dict[str, An
         comorbidity=random.choice(DIAGNOSES),
         missed=random.randint(0, 4),
         adherence=random.choice(["adherent", "partially adherent", "non-adherent"]),
-        lab_result=random.choice([
-            "HbA1c 7.2% (improved)", "LDL 118 mg/dL", "TSH 2.4 (normal)",
-            "creatinine stable at 1.1", "CBC within normal limits"
-        ]),
+        lab_result=random.choice(
+            [
+                "HbA1c 7.2% (improved)",
+                "LDL 118 mg/dL",
+                "TSH 2.4 (normal)",
+                "creatinine stable at 1.1",
+                "CBC within normal limits",
+            ]
+        ),
         distance=round(random.uniform(0.5, 35), 1),
     )
 
