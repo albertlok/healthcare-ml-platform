@@ -31,6 +31,10 @@ fake = Faker()
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_CLINICAL_NOTES", "clinical_notes")
+# all-MiniLM-L6-v2 is a great default: 384-dimensional embeddings, ~22M parameters,
+# fast to run (even on CPU), and strong semantic similarity for English text.
+# It's ~80MB on first download. For better quality at higher cost, try
+# "sentence-transformers/all-mpnet-base-v2" (768 dims) or a medical-domain model.
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 CHIEF_COMPLAINTS = [
@@ -134,7 +138,11 @@ def embed_and_upsert(notes: list[dict], model: SentenceTransformer, collection: 
     ids = [n["id"] for n in notes]
     metadatas = [n["metadata"] for n in notes]
 
+    # batch_size=32 sends 32 texts to the embedding model at once, which uses GPU/CPU
+    # vectorization efficiently. Smaller batches are slower; too large a batch can OOM.
     embeddings = model.encode(texts, show_progress_bar=False, batch_size=32).tolist()
+    # upsert = insert if new, update if the id already exists. This makes the script
+    # re-runnable without creating duplicate notes in ChromaDB.
     collection.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
 
 
@@ -151,6 +159,10 @@ def main() -> None:
     client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
+        # hnsw:space="cosine" means similarity is measured by cosine distance.
+        # Cosine similarity is standard for text embeddings because it measures the
+        # angle between vectors (semantic direction) rather than their magnitude.
+        # This way, a long note and a short note about the same topic score as similar.
         metadata={"hnsw:space": "cosine"},
     )
 

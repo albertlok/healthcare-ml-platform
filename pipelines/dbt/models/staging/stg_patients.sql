@@ -1,7 +1,16 @@
+-- Staging model for the SCD2 patients dimension.
+-- We filter to is_current=true here so all downstream models always see the latest
+-- patient state. If you ever need historical patient attributes (e.g., "what was this
+-- patient's insurance type when they had their appointment in 2023?"), you can create
+-- a separate stg_patients_history model that joins on valid_from/valid_to instead.
+
 with
 
 source as (
-    -- Current patient records from SCD2 silver table
+    -- Only current patient rows from the SCD2 table.
+    -- SCD2 stores one row per change event — multiple rows per patient exist, but
+    -- only one has is_current=true (the most recent state). This filter collapses
+    -- history into a single "current view" of each patient.
     select * from {{ source('silver', 'patients') }}
     where is_current = true
 ),

@@ -40,7 +40,10 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 BRONZE_PATH = f"{DELTA_LAKE_PATH}/bronze/patients_raw"
 SILVER_PATH = f"{DELTA_LAKE_PATH}/silver/patients"
 
-# Sentinel timestamp used as valid_to for current rows
+# Sentinel timestamp for "this row is current — no end date yet."
+# Using year 9999 instead of NULL makes range queries much simpler:
+# you can do WHERE valid_to > NOW() instead of WHERE valid_to IS NULL OR valid_to > NOW().
+# It's a common SCD2 convention and works naturally with BETWEEN queries.
 HIGH_WATERMARK_TS = "9999-12-31T23:59:59"
 
 
@@ -78,12 +81,14 @@ def prepare_incoming(df: DataFrame) -> DataFrame:
     window = Window.partitionBy("patient_id").orderBy(F.col("event_timestamp").desc())
     return (
         df
-        # Cast epoch millis to timestamp
+        # Convert epoch milliseconds (from Kafka) to a proper Spark timestamp.
         .withColumn(
             "event_timestamp_ts",
             (F.col("event_timestamp") / 1000).cast(TimestampType()),
         )
-        # Epoch days → date
+        # The Avro schema stores date_of_birth as integer epoch days (days since 1970-01-01).
+        # This is a common Avro/Parquet convention for dates — it avoids timezone ambiguity.
+        # date_add(date '1970-01-01', N) converts N epoch days back to a calendar date.
         .withColumn(
             "date_of_birth_date",
             F.expr("date_add(date '1970-01-01', date_of_birth)"),
@@ -98,12 +103,15 @@ def prepare_incoming(df: DataFrame) -> DataFrame:
         .withColumn(
             "has_chronic_condition", F.coalesce(F.col("has_chronic_condition"), F.lit(False))
         )
-        # Add SCD2 control columns
+        # SCD2 control columns. Every incoming row starts as "current" —
+        # the merge step below will close (expire) rows that are no longer current.
         .withColumn("valid_from", F.col("event_timestamp_ts"))
         .withColumn("valid_to", F.lit(HIGH_WATERMARK_TS).cast(TimestampType()))
         .withColumn("is_current", F.lit(True))
         .withColumn("_silver_processed_at", F.current_timestamp())
-        # Deduplicate: latest event per patient within this batch
+        # Within a single batch, a patient may have multiple events (e.g., REGISTERED
+        # then PROFILE_UPDATED). We only want the latest state for this batch, so we
+        # keep row_number = 1 (highest event_timestamp per patient).
         .withColumn("_row_num", F.row_number().over(window))
         .filter(F.col("_row_num") == 1)
         .drop("_row_num", "event_timestamp", "date_of_birth", "_partition_date", "_ingested_at")
@@ -119,7 +127,10 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
          (set valid_to = incoming.valid_from, is_current = FALSE)
       2. Insert all incoming rows as new current records
     """
-    # Columns that, when changed, trigger a new SCD2 version
+    # Only changes to these columns create a new SCD2 version row.
+    # Static attributes like gender and date_of_birth are NOT tracked because we don't
+    # want a typo correction to litter the history with spurious versions.
+    # Add columns here if your business needs to track when they changed over time.
     tracked_cols = [
         "insurance_type",
         "insurance_plan_name",
@@ -138,10 +149,14 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
 
     silver_table = DeltaTable.forPath(spark, SILVER_PATH)
 
-    # Build a change-detection expression: any tracked column differs
+    # Build a change-detection expression: any tracked column differs.
+    # This becomes the merge condition that identifies rows needing a new version.
     change_condition = " OR ".join([f"target.{c} != source.{c}" for c in tracked_cols])
 
-    # Step 1: Close stale current rows that have changed
+    # Step 1: Close stale current rows that have changed.
+    # We set valid_to = source.valid_from (i.e., the new event's timestamp) and
+    # flip is_current to false. The old row is now a historical record with a closed range.
+    # Note: rows that haven't changed are untouched — no new version is created.
     silver_table.alias("target").merge(
         incoming.alias("source"),
         """
@@ -157,7 +172,10 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
         }
     ).execute()
 
-    # Step 2: Insert new current rows for patients that changed + net-new patients
+    # Step 2: Insert new current rows for patients that changed + net-new patients.
+    # After Step 1, changed patients no longer have an is_current=true row.
+    # A left_anti join gives us all incoming patients that DON'T have a current row,
+    # covering both (a) brand-new patients and (b) patients whose old row was just closed.
     existing_current = (
         spark.read.format("delta")
         .load(SILVER_PATH)
@@ -165,8 +183,8 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
         .select("patient_id")
     )
 
-    # Insert if: patient is net-new OR patient had a change (no longer has a current row
-    # after step 1 closed it)
+    # left_anti = keep rows from incoming that have NO match in existing_current.
+    # This is equivalent to: SELECT * FROM incoming WHERE patient_id NOT IN (existing_current)
     to_insert = incoming.join(
         existing_current,
         on="patient_id",

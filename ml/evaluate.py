@@ -73,6 +73,13 @@ def evaluate() -> None:
     y_pred = (y_proba >= threshold).astype(int)
 
     # ── Classification metrics ────────────────────────────────────────────────
+    # For imbalanced healthcare problems, we track multiple metrics:
+    # - roc_auc: threshold-independent, good overall discriminability measure
+    # - avg_precision (AUCPR): better than ROC AUC for imbalanced data — tells you
+    #   how well the model identifies the minority class (no-shows)
+    # - precision/recall: there's a tradeoff; prefer higher recall in clinical settings
+    #   because a missed no-show (false negative) costs more than a false alarm
+    # - positive_rate: sanity check — should match real-world no-show rates (~5-30%)
     metrics = {
         "roc_auc": round(roc_auc_score(y_test, y_proba), 4),
         "avg_precision": round(average_precision_score(y_test, y_proba), 4),
@@ -98,6 +105,11 @@ def evaluate() -> None:
     plt.close(fig)
 
     # ── SHAP summary plot ─────────────────────────────────────────────────────
+    # SHAP (SHapley Additive exPlanations) explains each prediction by attributing
+    # a contribution value to each feature. The summary plot shows which features
+    # have the most impact across the whole test set.
+    # TreeExplainer is XGBoost-native and fast — it uses the tree structure directly
+    # instead of sampling. We cap at 500 rows because SHAP computation is O(n * depth).
     explainer = shap.TreeExplainer(booster)
     shap_values = explainer.shap_values(X_test.sample(min(500, len(X_test)), random_state=42))
 
@@ -113,6 +125,10 @@ def evaluate() -> None:
     plt.close()
 
     # ── Feature importance plot ───────────────────────────────────────────────
+    # importance_type="gain" measures the average improvement in accuracy a feature
+    # brings when it's used to split a node. It's more reliable than "weight" (which
+    # just counts splits) because a feature used once in a critical split scores higher
+    # than a feature used many times in unimportant splits.
     importance = booster.get_score(importance_type="gain")
     fi_df = (
         pd.DataFrame(list(importance.items()), columns=["feature", "gain"])

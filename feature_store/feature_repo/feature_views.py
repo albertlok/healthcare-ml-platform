@@ -27,6 +27,10 @@ from feast.types import Bool, Float32, Int32
 patient_appointment_stats = FeatureView(
     name="patient_appointment_stats",
     entities=[patient],
+    # ttl (time-to-live): how long a feature value stays valid after it was computed.
+    # If a patient's last feature computation was >90 days ago, Feast returns NULL
+    # instead of stale data. This prevents the model from using ancient statistics
+    # for patients who haven't been seen recently. Set this to match your rolling window.
     ttl=timedelta(days=90),
     schema=[
         Field(

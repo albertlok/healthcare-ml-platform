@@ -39,6 +39,10 @@ log = structlog.get_logger()
 
 def _maybe_slack_callback(context: Any) -> None:
     """Fire Slack alert on failure only if the connection is configured."""
+    # We guard with a try/except so that the callback is a no-op in local dev
+    # where no Slack connection exists. In production, the connection is configured
+    # in Airflow's connection store (Secrets Manager, Vault, etc.) and alerts fire.
+    # Never hardcode webhook URLs here — they're credentials and should live in Airflow Connections.
     try:
         Connection.get_connection_from_secrets("slack_data_alerts")
     except Exception:
@@ -52,15 +56,24 @@ def _maybe_slack_callback(context: Any) -> None:
 
 
 # ── DAG defaults ──────────────────────────────────────────────────────────────
+# default_args are applied to every task in this DAG unless overridden at the task level.
 DEFAULT_ARGS = {
     "owner": "data-engineering",
+    # depends_on_past=False: each DAG run is independent. Set to True only if you
+    # need sequential processing where today's run must wait for yesterday's to succeed.
     "depends_on_past": False,
     "email_on_failure": False,
     "email_on_retry": False,
+    # 2 retries with exponential backoff handles transient errors (S3 throttling,
+    # network blips) without manual intervention. For production, consider retries=3.
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
+    # exponential backoff: retry_delay doubles each attempt (5m → 10m → 20m).
+    # This is gentler on downstream systems during incidents.
     "retry_exponential_backoff": True,
     "on_failure_callback": _maybe_slack_callback,
+    # SLA: if the task takes longer than 45 minutes, Airflow fires an SLA miss alert.
+    # This doesn't stop the task — it's a notification mechanism for monitoring.
     "sla": timedelta(minutes=45),
 }
 
@@ -75,7 +88,13 @@ DRIFT_THRESHOLD = float(os.getenv("DRIFT_P_VALUE_THRESHOLD", "0.05"))
     description="End-to-end patient no-show risk data pipeline",
     schedule="@hourly",
     start_date=days_ago(1),
+    # catchup=False: don't backfill past runs when the DAG is first deployed.
+    # If we deployed this today and catchup=True, Airflow would immediately try to
+    # run every hour since start_date — potentially thousands of runs.
     catchup=False,
+    # max_active_runs=1: only one run executes at a time.
+    # Prevents parallel runs from writing to the same Delta partition simultaneously,
+    # which would cause data corruption or confusing merge conflicts.
     max_active_runs=1,
     default_args=DEFAULT_ARGS,
     tags=["healthcare", "ml", "delta-lake", "spark", "dbt", "feast"],
@@ -164,8 +183,13 @@ def patient_risk_pipeline():
         check_bronze_appointments()
         check_bronze_patients()
 
-    # ── Task Group: Silver Transforms (pandas + deltalake for local dev) ─────────
-    # Production equivalent: SparkSubmitOperator against pipelines/spark/silver/
+    # ── Task Group: Silver Transforms ─────────────────────────────────────────
+    # In local dev (Docker) we use pandas + deltalake (Python delta-rs bindings)
+    # instead of a full PySpark cluster — same logic, zero Spark overhead.
+    # In production you'd replace these @task functions with SparkSubmitOperator
+    # pointing to pipelines/spark/silver/clean_appointments.py, etc.
+    # The separation means the business logic (dedup, SCD2) is proven in the
+    # Spark jobs, and the DAG just calls them as subprocesses.
     @task_group(group_id="silver_transforms")
     def silver_transforms():
 
@@ -393,7 +417,11 @@ def patient_risk_pipeline():
 
         store = FeatureStore(repo_path=FEAST_REPO_PATH)
         end_ts = datetime.utcnow()
-        start_ts = end_ts - timedelta(hours=25)  # 1-hour overlap for safety
+        # 25-hour window (not 24) provides a 1-hour overlap as a safety buffer.
+        # If the previous run's materialization took slightly longer than an hour,
+        # the overlap ensures no feature values are accidentally skipped.
+        # Feast materialization is idempotent — re-materializing the same period is safe.
+        start_ts = end_ts - timedelta(hours=25)
 
         store.materialize(start_date=start_ts, end_date=end_ts)
 
@@ -487,6 +515,11 @@ def patient_risk_pipeline():
     @task.branch(task_id="should_retrain")
     def should_retrain(drift_result: dict) -> str:
         """Branch: trigger retraining if drift was detected."""
+        # @task.branch returns the task_id of the next task to run.
+        # Airflow will skip all other branches automatically.
+        # This is the "event-driven retraining" pattern: instead of retraining on a
+        # fixed schedule, we only retrain when the data has actually changed enough
+        # to degrade the model. This saves compute cost and avoids noisy retraining.
         if drift_result.get("drift_detected", False):
             log.info("drift_detected_triggering_retrain")
             return "trigger_model_retraining"
@@ -509,6 +542,11 @@ def patient_risk_pipeline():
         )
 
     # ── Wire up the DAG ───────────────────────────────────────────────────────
+    # The >> operator sets task dependencies (left must complete before right starts).
+    # Read this as a pipeline: bronze quality gate → silver transforms → dbt gold →
+    # feast materialization → drift detection → conditional retrain branch.
+    # The branch at the end fans out to either trigger_retraining OR pipeline_complete,
+    # depending on whether drift was detected.
     bronze_gate = bronze_quality_gate()
     silver = silver_transforms()
     dbt = dbt_run_gold()

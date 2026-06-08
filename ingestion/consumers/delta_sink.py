@@ -54,6 +54,8 @@ MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 
+# Maps Kafka topic names to the Delta Lake table names where their data lands.
+# This indirection lets us rename topics without changing downstream path logic.
 TOPIC_TABLE_MAP = {
     "dev.healthcare.appointment.scheduled": "appointments_raw",
     "dev.healthcare.patient.registered": "patients_raw",
@@ -61,7 +63,11 @@ TOPIC_TABLE_MAP = {
 
 SCHEMA_DIR = Path(__file__).parent.parent / "schemas"
 
-# Avro → Spark schema mappings per topic
+# We define explicit Spark schemas instead of letting Spark infer them.
+# Schema inference requires reading a sample of the data first (slow + unreliable
+# on small samples) and can produce inconsistent types across runs (e.g., a column
+# that happens to be all integers in the sample gets inferred as LongType, but the
+# next run might see a null and infer StringType). Explicit schemas are always correct.
 APPOINTMENT_SPARK_SCHEMA = StructType(
     [
         StructField("event_id", StringType(), False),
@@ -75,12 +81,17 @@ APPOINTMENT_SPARK_SCHEMA = StructType(
         StructField("scheduled_start_ts", LongType(), False),
         StructField("scheduled_duration_minutes", IntegerType(), False),
         StructField("is_reminder_sent", BooleanType(), False),
+        # Avro arrays can't be stored directly in Delta Lake columnar format,
+        # so we serialize them to a JSON string. The silver job parses them back out.
         StructField("reminder_channels", StringType(), True),  # serialized JSON array
         StructField("insurance_type", StringType(), True),
         StructField("copay_amount_usd", FloatType(), True),
         StructField("cancellation_reason", StringType(), True),
         StructField("lead_time_hours", IntegerType(), True),
         StructField("metadata_json", StringType(), True),  # serialized map
+        # _ingested_at and _partition_date are added by the sink (not from Kafka).
+        # They represent when the event arrived in our system, not when it happened —
+        # these are useful for debugging reprocessing and late-arriving data.
         StructField("_ingested_at", TimestampType(), False),
         StructField("_partition_date", StringType(), False),
     ]
@@ -117,16 +128,27 @@ TOPIC_SCHEMA_MAP = {
 def build_spark() -> SparkSession:
     return (
         SparkSession.builder.appName("KafkaDeltaBronzeSink")
+        # These two configs register the Delta Lake extensions with Spark.
+        # Without them, spark.read.format("delta") would fail with "format not found".
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
+        # MinIO is an S3-compatible object store used locally in Docker.
+        # In production on AWS, remove these four hadoop configs — the SDK picks up
+        # IAM roles automatically. On Azure/GCP swap s3a for abfss/gs configs.
         .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY)
         .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
+        # path.style.access=true is required for MinIO. AWS S3 uses virtual-hosted style
+        # (bucket.s3.amazonaws.com) which is the default; MinIO uses path style
+        # (s3.host/bucket). Mixing these up causes confusing 403/404 errors.
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        # autoMerge lets Delta automatically evolve the schema when new columns appear
+        # in incoming data. Safe for bronze (raw data) — don't enable in silver/gold
+        # where schema changes should be intentional and reviewed.
         .config("spark.databricks.delta.schema.autoMerge.enabled", "true")
         .getOrCreate()
     )
@@ -164,7 +186,12 @@ def write_batch_to_delta(
 
     (
         df.write.format("delta")
+        # append mode = immutable bronze. We never update or delete in the bronze layer;
+        # every Kafka event is preserved exactly as received. Corrections happen in silver.
         .mode("append")
+        # Partitioning by date limits how much data Spark needs to scan for time-bounded
+        # queries like "give me yesterday's records." Without partitioning, Spark reads
+        # every file in the table regardless of the date filter.
         .partitionBy("_partition_date")
         .option("mergeSchema", "true")
         .save(delta_path)
@@ -191,9 +218,22 @@ def build_consumer(topics: list[str]) -> tuple[Consumer, dict[str, AvroDeseriali
     consumer = Consumer(
         {
             "bootstrap.servers": BOOTSTRAP_SERVERS,
+            # Consumer group ID lets Kafka track which messages this group has processed.
+            # Multiple instances of this consumer with the same group.id split the
+            # partitions between them for horizontal scaling.
             "group.id": CONSUMER_GROUP,
+            # earliest = start from the beginning of the topic if no committed offset exists.
+            # Use "latest" if you only want new messages and don't need historical replay.
             "auto.offset.reset": "earliest",
-            "enable.auto.commit": False,  # manual commit after Delta write
+            # Disabling auto-commit means we control exactly when offsets are committed.
+            # We commit only AFTER successfully writing to Delta Lake, which gives us
+            # at-least-once semantics: if the Delta write fails, we'll reprocess the
+            # same messages on restart. Delta's ACID transactions make reprocessing safe
+            # because duplicate appends to bronze are fine — silver deduplicates them.
+            "enable.auto.commit": False,
+            # max.poll.interval.ms: if poll() isn't called within this window, Kafka
+            # assumes the consumer is dead and reassigns its partitions. Set this high
+            # enough to cover your worst-case Delta write latency.
             "max.poll.interval.ms": 300000,
         }
     )
