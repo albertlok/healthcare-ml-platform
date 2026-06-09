@@ -55,6 +55,54 @@ def _maybe_slack_callback(context: Any) -> None:
     )(context)
 
 
+def _restore_delta_on_dq_failure(
+    table_path: str,
+    storage_options: dict,
+    dag_run_window_start: datetime,
+) -> bool:
+    """Roll back a Delta table to the version before the most recent write if that write
+    occurred within the current pipeline window and its data triggered a DQ failure.
+
+    This handles the case where the upstream producer wrote corrupt data during the
+    current pipeline interval. Rolling back prevents bad rows from blocking all
+    downstream tasks on the next retry.
+
+    Returns True when a restore is performed so callers can log it.
+    """
+    from deltalake import DeltaTable as _DeltaTable
+
+    try:
+        dt = _DeltaTable(table_path, storage_options=storage_options)
+        history = dt.history(5)
+    except Exception as exc:
+        log.warning("delta_restore_history_read_failed", path=table_path, error=str(exc))
+        return False
+
+    if len(history) < 2:
+        return False  # No previous version to restore to
+
+    latest = history[0]
+    latest_op = latest.get("operation", "")
+    latest_ts = datetime.utcfromtimestamp(latest["timestamp"] / 1000)
+
+    # Only restore when the latest write was within the current pipeline window —
+    # avoids rolling back data written by previous (healthy) runs.
+    write_operations = {"WRITE", "MERGE", "STREAMING UPDATE", "DELETE", "UPDATE"}
+    if latest_op in write_operations and latest_ts >= dag_run_window_start:
+        restore_to_version = history[1]["version"]
+        log.warning(
+            "delta_restoring_to_last_good_version",
+            table=table_path,
+            bad_version=latest["version"],
+            restoring_to=restore_to_version,
+            triggering_operation=latest_op,
+        )
+        dt.restore_to_version(restore_to_version)
+        return True
+
+    return False
+
+
 # ── DAG defaults ──────────────────────────────────────────────────────────────
 # default_args are applied to every task in this DAG unless overridden at the task level.
 DEFAULT_ARGS = {
@@ -102,34 +150,108 @@ DRIFT_THRESHOLD = float(os.getenv("DRIFT_P_VALUE_THRESHOLD", "0.05"))
 )
 def patient_risk_pipeline():
 
+    # ── Task: Circuit Breaker ─────────────────────────────────────────────────
+    @task(task_id="check_lag")
+    def check_lag(**context: Any) -> None:
+        """Circuit breaker: skip the entire DAG run if the bronze table hasn't received
+        a new commit in more than 3 hours.
+
+        Without this gate, repeated silver-write failures cause bronze to accumulate
+        unbounded data across hourly runs. The circuit breaker halts the cascade:
+        it skips the current run, sets an Airflow Variable as a human-visible flag,
+        and fires the Slack alert so the on-call engineer knows to investigate.
+
+        To re-enable the pipeline after the root cause is fixed:
+          airflow variables delete patient_risk_pipeline_paused
+        """
+        import os
+        from datetime import timedelta
+
+        from airflow.exceptions import AirflowSkipException
+        from airflow.models import Variable
+
+        _LAG_THRESHOLD = timedelta(hours=3)
+        _BRONZE_PATH = "s3://healthcare/bronze/appointments_raw"
+        _PAUSE_VAR = "patient_risk_pipeline_paused"
+
+        # Respect a manually-set pause flag — operator may have set it during an incident
+        if Variable.get(_PAUSE_VAR, default_var="false") == "true":
+            raise AirflowSkipException(
+                f"Pipeline paused via Variable '{_PAUSE_VAR}'. "
+                "Unset it to resume: airflow variables delete patient_risk_pipeline_paused"
+            )
+
+        storage_opts = {
+            "endpoint_url": "http://minio:9000",
+            "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+            "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+            "aws_allow_http": "true",
+            "region": "us-east-1",
+        }
+
+        try:
+            from deltalake import DeltaTable
+
+            history = DeltaTable(_BRONZE_PATH, storage_options=storage_opts).history(1)
+            if not history:
+                log.warning("circuit_breaker_no_delta_history_failing_open")
+                return  # Fail open: let downstream tasks surface the real error
+
+            last_commit_ts = datetime.utcfromtimestamp(history[0]["timestamp"] / 1000)
+            lag = datetime.utcnow() - last_commit_ts
+        except Exception as exc:
+            # Fail open: if we can't read the Delta log (e.g. MinIO down), let downstream
+            # tasks produce a clearer error rather than masking it with a skip
+            log.warning("circuit_breaker_check_error_failing_open", error=str(exc))
+            return
+
+        log.info(
+            "circuit_breaker_lag_check",
+            lag_hours=round(lag.total_seconds() / 3600, 2),
+            last_bronze_ts=last_commit_ts.isoformat(),
+            threshold_hours=_LAG_THRESHOLD.total_seconds() / 3600,
+        )
+
+        if lag > _LAG_THRESHOLD:
+            Variable.set(_PAUSE_VAR, "true")
+            _maybe_slack_callback(context)
+            raise AirflowSkipException(
+                f"Circuit breaker open: bronze lag is {lag} (threshold: {_LAG_THRESHOLD}). "
+                f"DAG skipped. Unset Variable '{_PAUSE_VAR}' after fixing root cause to resume."
+            )
+
     # ── Task Group: Bronze Quality Gate ──────────────────────────────────────
     @task_group(group_id="bronze_quality")
     def bronze_quality_gate():
 
-        def _read_bronze_delta(table_path: str):  # -> pd.DataFrame
+        def _read_bronze_delta(table_path: str, storage_options: dict) -> Any:
             """Read a Delta table from MinIO into a pandas DataFrame."""
-            import os
-
             from deltalake import DeltaTable
 
-            storage_options = {
+            s3_path = table_path.replace("s3a://", "s3://")
+            return DeltaTable(s3_path, storage_options=storage_options).to_pandas()
+
+        @task(task_id="check_bronze_appointments")
+        def check_bronze_appointments(**context: Any) -> dict:
+            """Run Great Expectations checkpoint on bronze appointments partition.
+
+            On DQ failure, inspects the Delta transaction log: if the most recent write
+            occurred within the current pipeline window, rolls back to the last-good version
+            before raising — so the next retry reads clean data.
+            """
+            import os
+
+            import great_expectations as gx
+
+            partition_date = context["ds"]
+            storage_opts = {
                 "endpoint_url": "http://minio:9000",
                 "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
                 "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
                 "aws_allow_http": "true",
                 "region": "us-east-1",
             }
-            # s3a:// → s3:// for delta-rs
-            s3_path = table_path.replace("s3a://", "s3://")
-            return DeltaTable(s3_path, storage_options=storage_options).to_pandas()
-
-        @task(task_id="check_bronze_appointments")
-        def check_bronze_appointments(**context: Any) -> dict:
-            """Run Great Expectations checkpoint on bronze appointments partition."""
-            import great_expectations as gx
-
-            partition_date = context["ds"]
-            df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/appointments_raw")
+            df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/appointments_raw", storage_opts)
             context_gx = gx.get_context(context_root_dir="/opt/airflow/quality")
 
             result = context_gx.run_checkpoint(
@@ -147,16 +269,34 @@ def patient_risk_pipeline():
                     for r in val.get("validation_result", {}).get("results", [])
                     if not r["success"]
                 ]
+                # Before raising, attempt Delta RESTORE if a write in this window caused the failure
+                window_start = context["data_interval_start"].replace(tzinfo=None)
+                s3_path = f"{DELTA_LAKE_PATH}/bronze/appointments_raw".replace("s3a://", "s3://")
+                restored = _restore_delta_on_dq_failure(s3_path, storage_opts, window_start)
+                if restored:
+                    log.warning(
+                        "bronze_appointments_restored_after_dq_failure",
+                        partition=partition_date,
+                    )
                 raise ValueError(f"Bronze DQ failed for {partition_date}. Failures: {failed}")
 
             return {"partition_date": partition_date, "dq_passed": True}
 
         @task(task_id="check_bronze_patients")
         def check_bronze_patients(**context: Any) -> dict:
+            import os
+
             import great_expectations as gx
 
             partition_date = context["ds"]
-            df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/patients_raw")
+            storage_opts = {
+                "endpoint_url": "http://minio:9000",
+                "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+                "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+                "aws_allow_http": "true",
+                "region": "us-east-1",
+            }
+            df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/patients_raw", storage_opts)
             context_gx = gx.get_context(context_root_dir="/opt/airflow/quality")
 
             result = context_gx.run_checkpoint(
@@ -174,6 +314,14 @@ def patient_risk_pipeline():
                     for r in val.get("validation_result", {}).get("results", [])
                     if not r["success"]
                 ]
+                window_start = context["data_interval_start"].replace(tzinfo=None)
+                s3_path = f"{DELTA_LAKE_PATH}/bronze/patients_raw".replace("s3a://", "s3://")
+                restored = _restore_delta_on_dq_failure(s3_path, storage_opts, window_start)
+                if restored:
+                    log.warning(
+                        "bronze_patients_restored_after_dq_failure",
+                        partition=partition_date,
+                    )
                 raise ValueError(
                     f"Bronze patients DQ failed for {partition_date}. Failures: {failed}"
                 )
@@ -269,13 +417,53 @@ def patient_risk_pipeline():
             df["_partition_date"] = context["ds"]
             df["_dq_passed"] = True
 
+            arrow_table = pa.Table.from_pandas(df, preserve_index=False)
+            staging_path = "s3://healthcare/silver/_staging/appointments"
+
+            # Write to staging first — if this fails, production silver is untouched
             write_deltalake(
-                silver_path,
-                pa.Table.from_pandas(df, preserve_index=False),
+                staging_path,
+                arrow_table,
                 storage_options=storage_opts,
                 mode="overwrite",
                 schema_mode="overwrite",
             )
+
+            # Validate staging before promoting — catches silent empty-write bugs before
+            # they overwrite a healthy production table
+            staging_count = len(DeltaTable(staging_path, storage_options=storage_opts).to_pandas())
+            if staging_count == 0:
+                raise ValueError(
+                    f"Staging write for silver/appointments produced 0 rows on {context['ds']}; "
+                    "production silver was not modified"
+                )
+
+            # Capture current silver version so we can restore if promotion crashes mid-write
+            try:
+                silver_dt = DeltaTable(silver_path, storage_options=storage_opts)
+                pre_promote_version = silver_dt.version()
+            except Exception:
+                pre_promote_version = None  # First write — nothing to restore to
+
+            try:
+                write_deltalake(
+                    silver_path,
+                    arrow_table,
+                    storage_options=storage_opts,
+                    mode="overwrite",
+                    schema_mode="overwrite",
+                )
+            except Exception:
+                if pre_promote_version is not None:
+                    DeltaTable(silver_path, storage_options=storage_opts).restore_to_version(
+                        pre_promote_version
+                    )
+                    log.warning(
+                        "silver_appointments_promotion_failed_restored",
+                        version=pre_promote_version,
+                    )
+                raise
+
             log.info("silver_appointments_written", rows=len(df), path=silver_path)
             return {"partition_date": context["ds"], "rows_written": len(df)}
 
@@ -330,13 +518,50 @@ def patient_risk_pipeline():
             # Audit
             df["_silver_processed_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            arrow_table = pa.Table.from_pandas(df, preserve_index=False)
+            staging_path = "s3://healthcare/silver/_staging/patients"
+
+            # Write to staging first — if this fails, production silver is untouched
             write_deltalake(
-                silver_path,
-                pa.Table.from_pandas(df, preserve_index=False),
+                staging_path,
+                arrow_table,
                 storage_options=storage_opts,
                 mode="overwrite",
                 schema_mode="overwrite",
             )
+
+            staging_count = len(DeltaTable(staging_path, storage_options=storage_opts).to_pandas())
+            if staging_count == 0:
+                raise ValueError(
+                    f"Staging write for silver/patients produced 0 rows on {context['ds']}; "
+                    "production silver was not modified"
+                )
+
+            try:
+                silver_dt = DeltaTable(silver_path, storage_options=storage_opts)
+                pre_promote_version = silver_dt.version()
+            except Exception:
+                pre_promote_version = None
+
+            try:
+                write_deltalake(
+                    silver_path,
+                    arrow_table,
+                    storage_options=storage_opts,
+                    mode="overwrite",
+                    schema_mode="overwrite",
+                )
+            except Exception:
+                if pre_promote_version is not None:
+                    DeltaTable(silver_path, storage_options=storage_opts).restore_to_version(
+                        pre_promote_version
+                    )
+                    log.warning(
+                        "silver_patients_promotion_failed_restored",
+                        version=pre_promote_version,
+                    )
+                raise
+
             log.info("silver_patients_written", rows=len(df), path=silver_path)
             return {"partition_date": context["ds"], "rows_written": len(df)}
 
@@ -542,11 +767,11 @@ def patient_risk_pipeline():
         )
 
     # ── Wire up the DAG ───────────────────────────────────────────────────────
-    # The >> operator sets task dependencies (left must complete before right starts).
-    # Read this as a pipeline: bronze quality gate → silver transforms → dbt gold →
-    # feast materialization → drift detection → conditional retrain branch.
-    # The branch at the end fans out to either trigger_retraining OR pipeline_complete,
-    # depending on whether drift was detected.
+    # check_lag is the circuit breaker at the head of the pipeline. If bronze lag exceeds
+    # 3 hours, it raises AirflowSkipException which cascades to all downstream tasks,
+    # skipping the entire run without marking it as failed. This prevents a stuck consumer
+    # from causing hundreds of failed hourly runs.
+    lag_check = check_lag()
     bronze_gate = bronze_quality_gate()
     silver = silver_transforms()
     dbt = dbt_run_gold()
@@ -555,7 +780,8 @@ def patient_risk_pipeline():
     branch = should_retrain(drift)
 
     (
-        bronze_gate
+        lag_check
+        >> bronze_gate
         >> silver
         >> dbt
         >> feast

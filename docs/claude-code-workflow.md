@@ -208,6 +208,88 @@ Kafka round-trip (producer → broker → consumer → MinIO) takes ~2 minutes f
 
 ---
 
+## Session 6 — Self-Healing Pipeline (Circuit Breaker + Delta RESTORE)
+
+**Prompt:**
+> Make this data system self-healing by implementing features 2 and 5 on this list [self-healing strategy document]
+
+**Context:** The `patient_risk_pipeline` DAG had two silent failure modes:
+1. A Spark crash mid-write could leave a Delta table in partial state with no automatic recovery.
+2. If silver writes fail repeatedly, the hourly DAG keeps rerunning, accumulating unprocessed bronze partitions unboundedly with no circuit breaker.
+
+### What Was Implemented
+
+#### Feature 2 — Delta Lake Repair on DQ Failure (`orchestration/dags/patient_risk_pipeline.py`)
+
+**`_restore_delta_on_dq_failure()` helper (module level)**
+
+Inspects the Delta transaction log via `DeltaTable.history()`. If the most recent write operation (`WRITE`, `MERGE`, `STREAMING UPDATE`, etc.) has a wall-clock timestamp that falls within the current pipeline's `data_interval_start` window, it calls `DeltaTable.restore_to_version()` to roll back to the last-good version before the exception propagates.
+
+This targets: producer writes corrupt data during the current hour → GE check fails → RESTORE so the next Airflow retry reads clean data instead of re-validating the same bad rows.
+
+```python
+# Called inside check_bronze_appointments / check_bronze_patients on GE failure
+window_start = context["data_interval_start"].replace(tzinfo=None)
+restored = _restore_delta_on_dq_failure(s3_path, storage_opts, window_start)
+```
+
+**Staging write + RESTORE guard for silver tasks**
+
+Both `silver_appointments_task` and `silver_patients_scd2_task` now follow a three-step write:
+
+1. Write to `silver/_staging/{appointments,patients}` — if this fails, production silver is untouched
+2. Validate staging row count > 0 before promoting — catches silent empty-write bugs
+3. Promote to production silver inside a `try/except` that calls `restore_to_version(pre_promote_version)` if the promotion raises
+
+```
+bronze → [staging write] → [row count gate] → [promote to silver]
+                                                      ↓ on failure
+                                                [restore to pre_promote_version]
+```
+
+The staging path acts as a validation checkpoint. Delta's own ACID atomicity already prevents partial commits, but the explicit RESTORE is a belt-and-suspenders guard for edge cases (transaction log corruption, network partition during commit).
+
+#### Feature 5 — Circuit Breaker at DAG Start (`orchestration/dags/patient_risk_pipeline.py`)
+
+**`check_lag` task** — first task in the pipeline, all other tasks depend on it.
+
+Each hourly run:
+1. Checks `Variable patient_risk_pipeline_paused` — if set to `"true"` by a previous run or an operator, raises `AirflowSkipException` immediately (manual hold)
+2. Reads the last commit timestamp from the bronze Delta log via `DeltaTable.history(1)`
+3. If `lag > 3h`: sets the Variable, fires the Slack alert callback, raises `AirflowSkipException`
+4. **Fails open** on errors (MinIO unreachable, table not found) — the circuit breaker skips only when it can confirm the problem; it doesn't mask a different infrastructure failure
+
+`AirflowSkipException` cascades through all downstream tasks, so the run shows as **SKIPPED** (not FAILED) — keeping alert noise low while the pipeline is in a holding pattern, not an error state.
+
+To re-enable after fixing the root cause:
+```bash
+airflow variables delete patient_risk_pipeline_paused
+```
+
+### DAG Dependency Graph (after changes)
+
+```
+check_lag ──► bronze_quality_gate ──► silver_transforms ──► dbt_run_gold
+                                                                   │
+                                                          feast_materialize
+                                                                   │
+                                                          drift_detection
+                                                                   │
+                                                          should_retrain (branch)
+                                                           ┌───────┴───────┐
+                                                 trigger_model_retraining  pipeline_complete
+```
+
+### Key Design Decisions
+
+**Fail-open circuit breaker:** If the circuit breaker can't read the Delta log (e.g. MinIO is down), it returns without raising. The downstream GE check will then fail with a clear storage error — more informative than a misleading "lag too high" skip.
+
+**Window-scoped RESTORE:** The restore helper only rolls back if the latest commit timestamp falls within `data_interval_start` → now. This avoids inadvertently rolling back data written by healthy prior runs when investigating a stale GE failure.
+
+**Staging path is not a true atomic rename:** Object storage doesn't support directory-level atomic renames. The staging pattern is valuable as a pre-promotion validation gate, not as a true swap primitive. Delta's transaction log is the atomic primitive; the staging step just ensures we never overwrite production with an empty or obviously-broken write.
+
+---
+
 ## How to Use Claude Code on This Repo
 
 ```bash
