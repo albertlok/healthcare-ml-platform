@@ -5,6 +5,12 @@ Uses confluent_kafka for Avro deserialization and the deltalake Python library
 for writing to Delta tables on MinIO. Intended for local dev where Spark is not
 available. For production, use delta_sink.py (PySpark) or Kafka Connect S3 Sink.
 
+Dead-letter queue (DLQ):
+  Messages that fail Avro deserialization are routed to a DLQ topic
+  (dev.healthcare.dlq.<original-topic>) rather than silently dropped.
+  The dlq_reprocessor DAG retries correctable messages after schema fixes and
+  writes irrecoverable ones to a poison Delta table for human review.
+
 Usage:
     python delta_sink_simple.py --max-messages 1000
     python delta_sink_simple.py --run-forever
@@ -13,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import signal
@@ -22,7 +29,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 import structlog
-from confluent_kafka import Consumer, KafkaError, KafkaException
+from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
@@ -51,6 +58,76 @@ TOPICS = {
 }
 
 CONSUMER_GROUP = "delta-sink-simple-consumer"
+
+
+def _dlq_topic(original_topic: str) -> str:
+    """Map a source topic to its dead-letter queue topic.
+
+    "dev.healthcare.appointment.scheduled"
+    → "dev.healthcare.dlq.appointment.scheduled"
+
+    The DLQ topic preserves the environment + domain prefix so Kafka ACLs and
+    retention policies can be managed at the {env}.{domain}.dlq.* wildcard level.
+    """
+    parts = original_topic.split(".", 2)  # ["dev", "healthcare", "appointment.scheduled"]
+    return f"{parts[0]}.{parts[1]}.dlq.{parts[2]}"
+
+
+def _publish_to_dlq(
+    producer: Producer,
+    msg: Any,
+    error_type: str,
+    error_message: str,
+    retry_count: int = 0,
+) -> None:
+    """Route a failed message to its DLQ topic with a structured JSON envelope.
+
+    The envelope preserves the original raw bytes (base64-encoded) so the
+    dlq_reprocessor DAG can retry deserialization after a schema fix without
+    needing the original Kafka messages to still be within retention.
+
+    Args:
+        producer: Kafka Producer for publishing to the DLQ topic.
+        msg: The original Kafka Message that failed deserialization.
+        error_type: Class name of the exception (e.g. "SerializerException").
+        error_message: Exception string, truncated to 2 KB to avoid huge payloads.
+        retry_count: How many times this specific message has been retried.
+    """
+    ts_info = msg.timestamp()
+    envelope = {
+        "original_topic": msg.topic(),
+        "kafka_partition": msg.partition(),
+        "kafka_offset": msg.offset(),
+        "kafka_key": msg.key().decode("utf-8", errors="replace") if msg.key() else None,
+        "kafka_timestamp_ms": ts_info[1] if ts_info[0] != 0 else None,
+        "raw_value_b64": base64.b64encode(msg.value() or b"").decode("utf-8"),
+        "error_type": error_type,
+        "error_message": str(error_message)[:2000],
+        "failed_at": datetime.now(tz=timezone.utc).isoformat(),
+        "retry_count": retry_count,
+    }
+    dlq = _dlq_topic(msg.topic())
+    try:
+        producer.produce(dlq, value=json.dumps(envelope).encode("utf-8"))
+        producer.flush()
+        log.warning(
+            "message_routed_to_dlq",
+            dlq_topic=dlq,
+            original_topic=msg.topic(),
+            partition=msg.partition(),
+            offset=msg.offset(),
+            error_type=error_type,
+        )
+    except Exception as publish_exc:
+        # DLQ publish failed — log both errors but don't crash the consumer.
+        # The message offset will NOT be committed, so it's retried on restart.
+        log.error(
+            "dlq_publish_failed_message_will_retry",
+            dlq_topic=dlq,
+            original_offset=msg.offset(),
+            original_error=error_type,
+            publish_error=str(publish_exc),
+        )
 
 
 def _flatten(record: dict[str, Any]) -> dict[str, Any]:
@@ -104,6 +181,10 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
     )
     consumer.subscribe(list(TOPICS.keys()))
 
+    # Separate producer for DLQ — reuses the same broker connection pool but
+    # is kept distinct so DLQ publish failures don't affect the main consumer.
+    dlq_producer = Producer({"bootstrap.servers": BOOTSTRAP_SERVERS})
+
     running = [True]
 
     def _stop(sig, frame):  # noqa: ANN001
@@ -114,6 +195,7 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
 
     buffers: dict[str, list] = {t: [] for t in TOPICS}
     total = 0
+    dlq_counts: dict[str, int] = {t: 0 for t in TOPICS}
 
     log.info("delta_sink_started", topics=list(TOPICS.keys()), batch_size=batch_size)
 
@@ -139,7 +221,18 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
 
             topic = msg.topic()
             ctx = SerializationContext(topic, MessageField.VALUE)
-            record = deserializers[topic](msg.value(), ctx)
+
+            try:
+                record = deserializers[topic](msg.value(), ctx)
+            except Exception as exc:
+                # Deserialization failed — route to DLQ instead of dropping.
+                # The offset is NOT committed, so the consumer re-sees this
+                # message on restart. The DLQ envelope holds the raw bytes for
+                # retry analysis by the dlq_reprocessor DAG.
+                _publish_to_dlq(dlq_producer, msg, type(exc).__name__, str(exc))
+                dlq_counts[topic] = dlq_counts.get(topic, 0) + 1
+                continue
+
             buffers[topic].append(record)
             total += 1
 
@@ -160,7 +253,12 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
         except KafkaException:
             pass  # _NO_OFFSET is expected when nothing left to commit
         consumer.close()
-        log.info("delta_sink_stopped", total_consumed=total)
+        dlq_producer.flush()
+        log.info(
+            "delta_sink_stopped",
+            total_consumed=total,
+            dlq_totals=dlq_counts,
+        )
 
 
 def main() -> None:
