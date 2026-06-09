@@ -129,6 +129,10 @@ DELTA_LAKE_PATH = os.getenv("DELTA_LAKE_PATH", "s3a://healthcare")
 FEAST_REPO_PATH = os.getenv("FEAST_REPO_PATH", "/opt/airflow/feature_store/feature_repo")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5001")
 DRIFT_THRESHOLD = float(os.getenv("DRIFT_P_VALUE_THRESHOLD", "0.05"))
+# Hard-fail the GE quality gate if more than this fraction of rows are quarantined.
+# Below the threshold the pipeline continues with clean rows; above it the data is too
+# corrupted for silver promotion to be safe.
+QUARANTINE_FAIL_THRESHOLD = float(os.getenv("QUARANTINE_FAIL_THRESHOLD", "0.5"))
 
 
 @dag(
@@ -233,15 +237,20 @@ def patient_risk_pipeline():
 
         @task(task_id="check_bronze_appointments")
         def check_bronze_appointments(**context: Any) -> dict:
-            """Run Great Expectations checkpoint on bronze appointments partition.
+            """Quality gate for the bronze appointments partition.
 
-            On DQ failure, inspects the Delta transaction log: if the most recent write
-            occurred within the current pipeline window, rolls back to the last-good version
-            before raising — so the next retry reads clean data.
+            Runs two complementary checks:
+            1. GE checkpoint for a batch-level pass/fail report (stored in gx/uncommitted/).
+               On failure, attempts Delta RESTORE if the write occurred in this pipeline window.
+            2. Row-level quarantine: bad rows are written to a quarantine Delta table and
+               removed from the forward path so good rows still reach silver.
+               Hard-fails only when the quarantine rate exceeds QUARANTINE_FAIL_THRESHOLD.
             """
             import os
 
             import great_expectations as gx
+            import pyarrow as pa
+            from deltalake import write_deltalake
 
             partition_date = context["ds"]
             storage_opts = {
@@ -269,24 +278,71 @@ def patient_risk_pipeline():
                     for r in val.get("validation_result", {}).get("results", [])
                     if not r["success"]
                 ]
-                # Before raising, attempt Delta RESTORE if a write in this window caused the failure
+                log.warning("gx_checkpoint_failed", failures=failed, partition=partition_date)
                 window_start = context["data_interval_start"].replace(tzinfo=None)
                 s3_path = f"{DELTA_LAKE_PATH}/bronze/appointments_raw".replace("s3a://", "s3://")
                 restored = _restore_delta_on_dq_failure(s3_path, storage_opts, window_start)
                 if restored:
+                    # Re-read after RESTORE so quarantine operates on the corrected data
+                    df = _read_bronze_delta(
+                        f"{DELTA_LAKE_PATH}/bronze/appointments_raw", storage_opts
+                    )
                     log.warning(
                         "bronze_appointments_restored_after_dq_failure",
                         partition=partition_date,
                     )
-                raise ValueError(f"Bronze DQ failed for {partition_date}. Failures: {failed}")
 
-            return {"partition_date": partition_date, "dq_passed": True}
+            # Row-level quarantine — runs regardless of GE batch result.
+            # Bad rows go to a quarantine Delta table; the quarantine_review DAG
+            # re-validates them daily and merges correctable rows back to bronze.
+            _VALID_APPT_EVENTS = {"SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"}
+            mask = (
+                df["appointment_id"].notna()
+                & df["patient_id"].notna()
+                & df["provider_id"].notna()
+                & df["event_type"].isin(_VALID_APPT_EVENTS)
+            )
+            bad_df = df[~mask].copy()
+
+            if not bad_df.empty:
+                bad_df["_quarantined_at"] = datetime.utcnow().isoformat()
+                bad_df["_quarantine_reason"] = "failed_row_level_dq_checks"
+                bad_df["_quarantine_partition_date"] = partition_date
+                write_deltalake(
+                    "s3://healthcare/quarantine/bronze_appointments",
+                    pa.Table.from_pandas(bad_df, preserve_index=False),
+                    storage_options=storage_opts,
+                    mode="append",
+                    schema_mode="merge",
+                )
+                log.warning("appointments_quarantined", count=len(bad_df), partition=partition_date)
+
+            bad_rate = len(bad_df) / max(len(df), 1)
+            if bad_rate > QUARANTINE_FAIL_THRESHOLD:
+                raise ValueError(
+                    f"Quarantine rate {bad_rate:.1%} exceeds threshold "
+                    f"{QUARANTINE_FAIL_THRESHOLD:.1%} for {partition_date}. "
+                    "Too many bad rows — pipeline hard-failed."
+                )
+
+            return {
+                "partition_date": partition_date,
+                "clean_count": len(df) - len(bad_df),
+                "quarantine_count": len(bad_df),
+            }
 
         @task(task_id="check_bronze_patients")
         def check_bronze_patients(**context: Any) -> dict:
+            """Quality gate for the bronze patients partition.
+
+            Mirrors check_bronze_appointments: GE batch report + row-level quarantine
+            with a QUARANTINE_FAIL_THRESHOLD hard-fail guard.
+            """
             import os
 
             import great_expectations as gx
+            import pyarrow as pa
+            from deltalake import write_deltalake
 
             partition_date = context["ds"]
             storage_opts = {
@@ -314,19 +370,47 @@ def patient_risk_pipeline():
                     for r in val.get("validation_result", {}).get("results", [])
                     if not r["success"]
                 ]
+                log.warning("gx_checkpoint_failed", failures=failed, partition=partition_date)
                 window_start = context["data_interval_start"].replace(tzinfo=None)
                 s3_path = f"{DELTA_LAKE_PATH}/bronze/patients_raw".replace("s3a://", "s3://")
                 restored = _restore_delta_on_dq_failure(s3_path, storage_opts, window_start)
                 if restored:
+                    df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/patients_raw", storage_opts)
                     log.warning(
                         "bronze_patients_restored_after_dq_failure",
                         partition=partition_date,
                     )
+
+            _VALID_PATIENT_EVENTS = {"REGISTERED", "UPDATED", "DEACTIVATED"}
+            mask = df["patient_id"].notna() & df["event_type"].isin(_VALID_PATIENT_EVENTS)
+            bad_df = df[~mask].copy()
+
+            if not bad_df.empty:
+                bad_df["_quarantined_at"] = datetime.utcnow().isoformat()
+                bad_df["_quarantine_reason"] = "failed_row_level_dq_checks"
+                bad_df["_quarantine_partition_date"] = partition_date
+                write_deltalake(
+                    "s3://healthcare/quarantine/bronze_patients",
+                    pa.Table.from_pandas(bad_df, preserve_index=False),
+                    storage_options=storage_opts,
+                    mode="append",
+                    schema_mode="merge",
+                )
+                log.warning("patients_quarantined", count=len(bad_df), partition=partition_date)
+
+            bad_rate = len(bad_df) / max(len(df), 1)
+            if bad_rate > QUARANTINE_FAIL_THRESHOLD:
                 raise ValueError(
-                    f"Bronze patients DQ failed for {partition_date}. Failures: {failed}"
+                    f"Quarantine rate {bad_rate:.1%} exceeds threshold "
+                    f"{QUARANTINE_FAIL_THRESHOLD:.1%} for {partition_date}. "
+                    "Too many bad rows — pipeline hard-failed."
                 )
 
-            return {"partition_date": partition_date, "dq_passed": True}
+            return {
+                "partition_date": partition_date,
+                "clean_count": len(df) - len(bad_df),
+                "quarantine_count": len(bad_df),
+            }
 
         check_bronze_appointments()
         check_bronze_patients()
@@ -736,6 +820,43 @@ def patient_risk_pipeline():
 
         return {"drift_detected": drift_detected, "report_path": str(report_file)}
 
+    # ── Task: Feast backfill before drift-triggered retraining ───────────────
+    @task(task_id="feast_backfill_drift")
+    def feast_backfill_drift(drift_result: dict, **context: Any) -> dict:
+        """Re-materialize the full 90-day Feast feature window before retraining.
+
+        Without this step, the model retrains on the same drifted feature distribution
+        that triggered the drift alert — the problem persists. By re-materializing the
+        full rolling window before retraining, we ensure the offline store reflects the
+        corrected current distribution, not the stale one that caused the alert.
+
+        The 90-day window covers the longest rolling feature (no_show_rate_90d).
+        A shorter backfill would leave the tail of that window stale.
+        """
+        try:
+            from feast import FeatureStore
+        except ImportError:
+            log.warning("feast_not_installed_skipping_drift_backfill")
+            return {"skipped": True, "reason": "feast_not_installed"}
+
+        store = FeatureStore(repo_path=FEAST_REPO_PATH)
+        end_ts = datetime.utcnow()
+        start_ts = end_ts - timedelta(days=90)
+
+        log.info(
+            "feast_drift_backfill_starting",
+            backfill_from=start_ts.isoformat(),
+            backfill_to=end_ts.isoformat(),
+            drift_result=drift_result,
+        )
+        store.materialize(start_date=start_ts, end_date=end_ts)
+        log.info("feast_drift_backfill_complete")
+
+        return {
+            "backfill_from": start_ts.isoformat(),
+            "backfill_to": end_ts.isoformat(),
+        }
+
     # ── Task: Conditional retraining trigger ──────────────────────────────────
     @task.branch(task_id="should_retrain")
     def should_retrain(drift_result: dict) -> str:
@@ -746,8 +867,10 @@ def patient_risk_pipeline():
         # fixed schedule, we only retrain when the data has actually changed enough
         # to degrade the model. This saves compute cost and avoids noisy retraining.
         if drift_result.get("drift_detected", False):
-            log.info("drift_detected_triggering_retrain")
-            return "trigger_model_retraining"
+            log.info("drift_detected_backfilling_feast_then_retraining")
+            # Route through feast_backfill_drift first so the offline store is
+            # re-materialized before the retraining job reads from it.
+            return "feast_backfill_drift"
         log.info("no_drift_skipping_retrain")
         return "pipeline_complete"
 
@@ -778,6 +901,9 @@ def patient_risk_pipeline():
     feast = feast_materialize()
     drift = drift_detection()
     branch = should_retrain(drift)
+    # feast_backfill_drift receives the drift report so it can log which features drifted.
+    # It only runs when should_retrain branches to "feast_backfill_drift".
+    feast_backfill = feast_backfill_drift(drift)
 
     (
         lag_check
@@ -787,8 +913,9 @@ def patient_risk_pipeline():
         >> feast
         >> drift
         >> branch
-        >> [trigger_retraining, pipeline_complete()]
+        >> [feast_backfill, pipeline_complete()]
     )
+    feast_backfill >> trigger_retraining
 
 
 patient_risk_pipeline()
