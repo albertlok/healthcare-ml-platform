@@ -125,9 +125,7 @@ def dlq_reprocessor() -> None:
     @task(task_id="dlq_summary")
     def dlq_summary(appt_result: dict, patient_result: dict, **context: Any) -> dict:
         """Log combined reprocessing stats and alert if poison messages accumulate."""
-        total_reprocessed = (
-            appt_result.get("reprocessed", 0) + patient_result.get("reprocessed", 0)
-        )
+        total_reprocessed = appt_result.get("reprocessed", 0) + patient_result.get("reprocessed", 0)
         total_poison = appt_result.get("poison", 0) + patient_result.get("poison", 0)
 
         log.info(

@@ -80,9 +80,7 @@ QUARANTINE_CONFIG = [
         "quarantine_path": "s3://healthcare/quarantine/bronze_appointments",
         "bronze_path": "s3://healthcare/bronze/appointments_raw",
         "entity_key": "appointment_id",
-        "valid_event_types": {
-            "SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"
-        },
+        "valid_event_types": {"SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"},
     },
     {
         "name": "patients",
@@ -227,7 +225,8 @@ def _review_quarantine(cfg: dict, partition_date: str) -> dict:
     if not recovered_df.empty:
         # Strip quarantine-only columns before writing back to bronze
         drop_cols = [
-            c for c in recovered_df.columns
+            c
+            for c in recovered_df.columns
             if c.startswith("_quarantine") or c == "_revalidation_passed"
         ]
         bronze_ready = recovered_df.drop(columns=drop_cols, errors="ignore")

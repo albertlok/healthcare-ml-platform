@@ -295,9 +295,7 @@ def patient_risk_pipeline():
             # Row-level quarantine — runs regardless of GE batch result.
             # Bad rows go to a quarantine Delta table; the quarantine_review DAG
             # re-validates them daily and merges correctable rows back to bronze.
-            _VALID_APPT_EVENTS = {
-                "SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"
-            }
+            _VALID_APPT_EVENTS = {"SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"}
             mask = (
                 df["appointment_id"].notna()
                 & df["patient_id"].notna()
@@ -317,9 +315,7 @@ def patient_risk_pipeline():
                     mode="append",
                     schema_mode="merge",
                 )
-                log.warning(
-                    "appointments_quarantined", count=len(bad_df), partition=partition_date
-                )
+                log.warning("appointments_quarantined", count=len(bad_df), partition=partition_date)
 
             bad_rate = len(bad_df) / max(len(df), 1)
             if bad_rate > QUARANTINE_FAIL_THRESHOLD:
@@ -379,19 +375,14 @@ def patient_risk_pipeline():
                 s3_path = f"{DELTA_LAKE_PATH}/bronze/patients_raw".replace("s3a://", "s3://")
                 restored = _restore_delta_on_dq_failure(s3_path, storage_opts, window_start)
                 if restored:
-                    df = _read_bronze_delta(
-                        f"{DELTA_LAKE_PATH}/bronze/patients_raw", storage_opts
-                    )
+                    df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/patients_raw", storage_opts)
                     log.warning(
                         "bronze_patients_restored_after_dq_failure",
                         partition=partition_date,
                     )
 
             _VALID_PATIENT_EVENTS = {"REGISTERED", "UPDATED", "DEACTIVATED"}
-            mask = (
-                df["patient_id"].notna()
-                & df["event_type"].isin(_VALID_PATIENT_EVENTS)
-            )
+            mask = df["patient_id"].notna() & df["event_type"].isin(_VALID_PATIENT_EVENTS)
             bad_df = df[~mask].copy()
 
             if not bad_df.empty:
@@ -405,9 +396,7 @@ def patient_risk_pipeline():
                     mode="append",
                     schema_mode="merge",
                 )
-                log.warning(
-                    "patients_quarantined", count=len(bad_df), partition=partition_date
-                )
+                log.warning("patients_quarantined", count=len(bad_df), partition=partition_date)
 
             bad_rate = len(bad_df) / max(len(df), 1)
             if bad_rate > QUARANTINE_FAIL_THRESHOLD:
