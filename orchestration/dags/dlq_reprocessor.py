@@ -170,13 +170,12 @@ def _reprocess_dlq_topic(
 
     Returns a summary dict with consumed / reprocessed / poison counts.
     """
+    import pandas as pd
+    import pyarrow as pa
     from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
     from confluent_kafka.schema_registry import SchemaRegistryClient
     from confluent_kafka.schema_registry.avro import AvroDeserializer
     from confluent_kafka.serialization import MessageField, SerializationContext
-
-    import pandas as pd
-    import pyarrow as pa
     from deltalake import write_deltalake
 
     registry = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
