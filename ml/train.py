@@ -78,7 +78,8 @@ def _build_entity_df(lookback_days: int) -> pd.DataFrame:
 
     duckdb_path = os.getenv("DUCKDB_PATH", "./pipelines/dbt/data/dev.duckdb")
     conn = duckdb.connect(duckdb_path, read_only=True)
-    df = conn.execute("""
+    df = conn.execute(
+        """
         SELECT
             pa.patient_id,
             a.provider_id,
@@ -88,7 +89,10 @@ def _build_entity_df(lookback_days: int) -> pd.DataFrame:
         JOIN main_staging.stg_appointments a
             ON pa.appointment_id = a.appointment_id
         WHERE pa.feature_timestamp >= CURRENT_DATE - INTERVAL '{days} days'
-    """.format(days=lookback_days)).df()
+    """.format(
+            days=lookback_days
+        )
+    ).df()
     conn.close()
     return df
 

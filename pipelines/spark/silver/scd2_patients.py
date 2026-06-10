@@ -163,7 +163,9 @@ def apply_scd2(spark: SparkSession, incoming: DataFrame) -> None:
         target.patient_id = source.patient_id
         AND target.is_current = true
         AND ({change_condition})
-        """.format(change_condition=change_condition),
+        """.format(
+            change_condition=change_condition
+        ),
     ).whenMatchedUpdate(
         set={
             "valid_to": "source.valid_from",
