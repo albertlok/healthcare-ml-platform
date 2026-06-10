@@ -190,6 +190,7 @@ def patient_risk_pipeline():
             "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
             "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
             "aws_allow_http": "true",
+            "aws_s3_allow_unsafe_rename": "true",
             "region": "us-east-1",
         }
 
@@ -258,6 +259,7 @@ def patient_risk_pipeline():
                 "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
                 "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
                 "aws_allow_http": "true",
+                "aws_s3_allow_unsafe_rename": "true",
                 "region": "us-east-1",
             }
             df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/appointments_raw", storage_opts)
@@ -314,6 +316,7 @@ def patient_risk_pipeline():
                     storage_options=storage_opts,
                     mode="append",
                     schema_mode="merge",
+                    engine="rust",
                 )
                 log.warning("appointments_quarantined", count=len(bad_df), partition=partition_date)
 
@@ -350,6 +353,7 @@ def patient_risk_pipeline():
                 "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
                 "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
                 "aws_allow_http": "true",
+                "aws_s3_allow_unsafe_rename": "true",
                 "region": "us-east-1",
             }
             df = _read_bronze_delta(f"{DELTA_LAKE_PATH}/bronze/patients_raw", storage_opts)
@@ -395,6 +399,7 @@ def patient_risk_pipeline():
                     storage_options=storage_opts,
                     mode="append",
                     schema_mode="merge",
+                    engine="rust",
                 )
                 log.warning("patients_quarantined", count=len(bad_df), partition=partition_date)
 
@@ -439,6 +444,7 @@ def patient_risk_pipeline():
                 "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
                 "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
                 "aws_allow_http": "true",
+                "aws_s3_allow_unsafe_rename": "true",
                 "region": "us-east-1",
             }
             bronze_path = "s3://healthcare/bronze/appointments_raw"
@@ -566,6 +572,7 @@ def patient_risk_pipeline():
                 "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
                 "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
                 "aws_allow_http": "true",
+                "aws_s3_allow_unsafe_rename": "true",
                 "region": "us-east-1",
             }
             bronze_path = "s3://healthcare/bronze/patients_raw"
@@ -671,6 +678,7 @@ def patient_risk_pipeline():
             "aws_access_key_id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
             "aws_secret_access_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
             "aws_allow_http": "true",
+            "aws_s3_allow_unsafe_rename": "true",
             "region": "us-east-1",
         }
 

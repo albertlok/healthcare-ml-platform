@@ -24,6 +24,7 @@ coverage.xml
 /models/
 /reports/
 *.dvc
+!/.dvc
 !.dvc/.gitignore
 
 # dbt
@@ -31,6 +32,7 @@ pipelines/dbt/target/
 pipelines/dbt/dbt_packages/
 pipelines/dbt/logs/
 pipelines/dbt/profiles.yml
+*.duckdb
 
 # Feast
 feature_store/feature_repo/data/

@@ -32,9 +32,10 @@ renamed as (
         -- Convert epoch days → date
         date_of_birth_date::date                            as date_of_birth,
 
-        -- SCD2 tracking
+        -- SCD2 tracking: valid_to is an empty string for the current row, so
+        -- NULLIF converts '' → NULL before the timestamp cast to avoid a ConversionError.
         valid_from::timestamp                               as valid_from,
-        valid_to::timestamp                                 as valid_to,
+        nullif(valid_to, '')::timestamp                     as valid_to,
         is_current::boolean                                 as is_current,
 
         _silver_processed_at::timestamp                     as _silver_processed_at

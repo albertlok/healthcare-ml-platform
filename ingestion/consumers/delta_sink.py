@@ -57,8 +57,8 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 # Maps Kafka topic names to the Delta Lake table names where their data lands.
 # This indirection lets us rename topics without changing downstream path logic.
 TOPIC_TABLE_MAP = {
-    "dev.healthcare.appointment.scheduled": "appointments_raw",
-    "dev.healthcare.patient.registered": "patients_raw",
+    "dev-healthcare-appointment-scheduled": "appointments_raw",
+    "dev-healthcare-patient-registered": "patients_raw",
 }
 
 SCHEMA_DIR = Path(__file__).parent.parent / "schemas"
@@ -120,8 +120,8 @@ PATIENT_SPARK_SCHEMA = StructType(
 )
 
 TOPIC_SCHEMA_MAP = {
-    "dev.healthcare.appointment.scheduled": APPOINTMENT_SPARK_SCHEMA,
-    "dev.healthcare.patient.registered": PATIENT_SPARK_SCHEMA,
+    "dev-healthcare-appointment-scheduled": APPOINTMENT_SPARK_SCHEMA,
+    "dev-healthcare-patient-registered": PATIENT_SPARK_SCHEMA,
 }
 
 
@@ -322,8 +322,8 @@ def main() -> None:
     args = parser.parse_args()
 
     topic_map = {
-        "appointments": "dev.healthcare.appointment.scheduled",
-        "patients": "dev.healthcare.patient.registered",
+        "appointments": "dev-healthcare-appointment-scheduled",
+        "patients": "dev-healthcare-patient-registered",
     }
     resolved_topics = [topic_map[t] for t in args.topics]
 

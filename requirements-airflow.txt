@@ -1,0 +1,28 @@
+# Packages baked into the custom Airflow image (Dockerfile.airflow).
+#
+# Use extras syntax to pull in optional deps automatically:
+#   confluent-kafka[avro]  → includes fastavro + requests
+#
+# After adding a package here, rebuild the image:
+#   docker compose build
+#   docker compose up -d --force-recreate airflow-worker airflow-webserver airflow-scheduler airflow-triggerer
+
+# Kafka + Avro (extras install fastavro automatically)
+confluent-kafka[avro]
+
+# Utilities
+structlog
+faker
+python-dotenv
+
+# Airflow providers
+apache-airflow-providers-apache-spark==4.8.2
+apache-airflow-providers-slack
+
+# Data / ML
+great-expectations==0.18.19
+deltalake
+dbt-core==1.8.8
+dbt-duckdb==1.8.4
+feast
+evidently

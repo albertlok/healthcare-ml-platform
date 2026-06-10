@@ -41,7 +41,7 @@ MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 
-TOPIC = "dev.healthcare.appointment.scheduled"
+TOPIC = "dev-healthcare-appointment-scheduled"
 BRONZE_PATH = f"{DELTA_LAKE_PATH}/bronze/appointments_raw"
 CHECKPOINT_PATH = f"{DELTA_LAKE_PATH}/_checkpoints/bronze_appointments"
 

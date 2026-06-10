@@ -18,6 +18,7 @@ dependencies = [
     # ── Spark + Delta Lake ─────────────────────────────────────
     "pyspark==3.5.1",
     "delta-spark==3.1.0",
+    "deltalake>=0.17.4",             # Python Delta Lake reader/writer (no Spark required)
 
     # ── Data warehouse / SQL ───────────────────────────────────
     "duckdb>=0.10.3",
