@@ -76,13 +76,23 @@ def _build_entity_df(lookback_days: int) -> pd.DataFrame:
     """Build an entity DataFrame by reading appointment events from DuckDB gold mart."""
     import duckdb
 
-    duckdb_path = os.getenv("DUCKDB_PATH", "./data/dev.duckdb")
+    duckdb_path = os.getenv("DUCKDB_PATH", "./pipelines/dbt/data/dev.duckdb")
     conn = duckdb.connect(duckdb_path, read_only=True)
-    df = conn.execute("""
-        SELECT patient_id, provider_id, scheduled_at AS event_timestamp, is_no_show AS label
-        FROM gold.ml_patient_appointment_stats
-        WHERE feature_timestamp >= CURRENT_DATE - INTERVAL '{days} days'
-    """.format(days=lookback_days)).df()
+    df = conn.execute(
+        """
+        SELECT
+            pa.patient_id,
+            a.provider_id,
+            pa.feature_timestamp AS event_timestamp,
+            pa.label
+        FROM main_ml.ml_patient_appointment_stats pa
+        JOIN main_staging.stg_appointments a
+            ON pa.appointment_id = a.appointment_id
+        WHERE pa.feature_timestamp >= CURRENT_DATE - INTERVAL '{days} days'
+    """.format(
+            days=lookback_days
+        )
+    ).df()
     conn.close()
     return df
 
@@ -93,12 +103,25 @@ def split(params: dict) -> None:
     df = pd.read_parquet(FEAT_PATH)
     split_params = params["split"]
 
-    # Drop non-feature columns. patient_id and appointment_id are identifiers —
-    # they would cause data leakage if left in (the model would memorize patients).
-    # feature_timestamp is the point-in-time marker used by Feast, not a real feature.
+    # Drop entity keys and timestamps — these are Feast join artifacts, not model features.
+    # provider_id and event_timestamp come from the Feast output DataFrame alongside
+    # patient_id and feature_timestamp (the original entity_df columns).
     X = df.drop(
-        columns=["label", "patient_id", "appointment_id", "feature_timestamp"], errors="ignore"
+        columns=[
+            "label",
+            "patient_id",
+            "provider_id",
+            "appointment_id",
+            "feature_timestamp",
+            "event_timestamp",
+        ],
+        errors="ignore",
     )
+    # Cast any remaining object-typed columns to float. Feast can return boolean
+    # features (e.g. has_chronic_condition) as Python object dtype when they contain
+    # nulls — pd.to_numeric handles both True/False and NaN gracefully.
+    for col in X.select_dtypes(include=["object", "datetime64[ns, UTC]", "datetime64[ns]"]).columns:
+        X[col] = pd.to_numeric(X[col], errors="coerce")
     y = df["label"].astype(int)
 
     X_trainval, X_test, y_trainval, y_test = train_test_split(

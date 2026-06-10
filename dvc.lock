@@ -1,0 +1,161 @@
+schema: '2.0'
+stages:
+  raw_features:
+    cmd: python ml/train.py --stage export-features
+    deps:
+    - path: feature_store/feature_repo/
+      hash: md5
+      md5: 05bac351193487b5c12f8191036da187.dir
+      size: 5541455
+      nfiles: 15
+    - path: ml/params.yaml
+      hash: md5
+      md5: b25ce75169484675317c728810bae93a
+      size: 717
+    - path: ml/train.py
+      hash: md5
+      md5: ac4be8e880e5c078700f404a752832f9
+      size: 10352
+    params:
+      ml/params.yaml:
+        features:
+          service_name: no_show_training_v1
+          entity_lookback_days: 90
+    outs:
+    - path: data/features/features.parquet
+      hash: md5
+      md5: 1d51775dfeb34284a13d106be0eca670
+      size: 37522
+  split:
+    cmd: python ml/train.py --stage split
+    deps:
+    - path: data/features/features.parquet
+      hash: md5
+      md5: 1d51775dfeb34284a13d106be0eca670
+      size: 37522
+    - path: ml/train.py
+      hash: md5
+      md5: ac4be8e880e5c078700f404a752832f9
+      size: 10352
+    params:
+      ml/params.yaml:
+        split:
+          test_size: 0.2
+          val_size: 0.1
+          random_state: 42
+          stratify: true
+    outs:
+    - path: data/test.parquet
+      hash: md5
+      md5: f5826adbf29f1ea332536420a28698b0
+      size: 10330
+    - path: data/train.parquet
+      hash: md5
+      md5: d9d36b2b809435cc31d6debeedef6ad4
+      size: 11601
+    - path: data/val.parquet
+      hash: md5
+      md5: bb6a84e02afb78045d5988e3075e309f
+      size: 9900
+  train:
+    cmd: python ml/train.py --stage train
+    deps:
+    - path: data/train.parquet
+      hash: md5
+      md5: d9d36b2b809435cc31d6debeedef6ad4
+      size: 11601
+    - path: data/val.parquet
+      hash: md5
+      md5: bb6a84e02afb78045d5988e3075e309f
+      size: 9900
+    - path: ml/train.py
+      hash: md5
+      md5: ac4be8e880e5c078700f404a752832f9
+      size: 10352
+    params:
+      ml/params.yaml:
+        model:
+          n_estimators: 200
+          max_depth: 6
+          learning_rate: 0.05
+          subsample: 0.8
+          colsample_bytree: 0.8
+          min_child_weight: 5
+          scale_pos_weight: 5.67
+          reg_alpha: 0.1
+          reg_lambda: 1.0
+          eval_metric: aucpr
+          early_stopping_rounds: 20
+    outs:
+    - path: models/feature_names.json
+      hash: md5
+      md5: f2dab5d22ed21f1e35c56c31dfbeb2f5
+      size: 325
+    - path: models/no_show_model.json
+      hash: md5
+      md5: 4cc1c9f602f5b2f965d829ff5514e3f1
+      size: 30057
+    - path: reports/train_metrics.json
+      hash: md5
+      md5: 2768cf0884590f253bd0fa24be12d4fc
+      size: 93
+  evaluate:
+    cmd: python ml/evaluate.py
+    deps:
+    - path: data/test.parquet
+      hash: md5
+      md5: f5826adbf29f1ea332536420a28698b0
+      size: 10330
+    - path: ml/evaluate.py
+      hash: md5
+      md5: edc0382e2f13407dbc246dbf41d8e631
+      size: 6996
+    - path: models/feature_names.json
+      hash: md5
+      md5: f2dab5d22ed21f1e35c56c31dfbeb2f5
+      size: 325
+    - path: models/no_show_model.json
+      hash: md5
+      md5: 4cc1c9f602f5b2f965d829ff5514e3f1
+      size: 30057
+    params:
+      ml/params.yaml:
+        thresholds:
+          classification: 0.35
+    outs:
+    - path: reports/confusion_matrix.png
+      hash: md5
+      md5: 053379585417cb49a29b486fcb2aeb33
+      size: 24995
+    - path: reports/eval_metrics.json
+      hash: md5
+      md5: 3afecf7822307154b711fb1df4a13ef6
+      size: 173
+    - path: reports/feature_importance.png
+      hash: md5
+      md5: 0e72197fd8a9f74d7ef32e1ae07072dd
+      size: 60884
+    - path: reports/shap_summary.png
+      hash: md5
+      md5: 8f0550ac086be9b77aa0a27f975050cd
+      size: 116843
+  register:
+    cmd: python ml/train.py --stage register
+    deps:
+    - path: ml/train.py
+      hash: md5
+      md5: ac4be8e880e5c078700f404a752832f9
+      size: 10352
+    - path: models/no_show_model.json
+      hash: md5
+      md5: 4cc1c9f602f5b2f965d829ff5514e3f1
+      size: 30057
+    - path: reports/eval_metrics.json
+      hash: md5
+      md5: 3afecf7822307154b711fb1df4a13ef6
+      size: 173
+    outs:
+    - path: models/mlflow_run_id.txt
+      hash: md5
+      md5: 777a579684a5aab9959f48ce819793df
+      size: 32

@@ -26,14 +26,7 @@ models:
       +materialized: view
       +schema: staging
       +tags: ["staging"]
-    intermediate:
-      +materialized: ephemeral
-      +tags: ["intermediate"]
     marts:
-      core:
-        +materialized: table
-        +schema: core
-        +tags: ["core", "mart"]
       ml:
         +materialized: table
         +schema: ml

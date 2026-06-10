@@ -338,7 +338,7 @@ feature_store.patient_features   -- Feast-materialized, point-in-time correct
 - **Schemas:** `bronze`, `silver`, `gold`, `feature_store`, `ml_outputs`
 - **Tables:** `{layer}_{entity}` → `silver_appointments`
 - **Columns:** `snake_case`; boolean columns prefixed `is_` or `has_`; timestamps suffixed `_at` (event time) or `_date` (date only)
-- **Kafka topics:** `{env}.{domain}.{entity}.{event}` → `prod.healthcare.appointment.scheduled`
+- **Kafka topics:** `{env}-{domain}-{entity}-{event}` → `prod-healthcare-appointment-scheduled`
 
 ---
 

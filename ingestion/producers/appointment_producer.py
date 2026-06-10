@@ -2,7 +2,7 @@
 Synthetic appointment event producer.
 
 Emits realistic (but fully synthetic) healthcare appointment lifecycle events
-to the Kafka topic `dev.healthcare.appointment.scheduled` using Avro serialization
+to the Kafka topic `dev-healthcare-appointment-scheduled` using Avro serialization
 and Confluent Schema Registry.
 
 Usage:
@@ -43,7 +43,7 @@ fake = Faker()
 SCHEMA_PATH = Path(__file__).parent.parent / "schemas" / "appointment_event.avsc"
 # All config comes from env vars so the same code runs in dev, staging, and prod
 # without code changes — only the .env file changes.
-TOPIC = os.getenv("KAFKA_TOPIC_APPOINTMENTS", "dev.healthcare.appointment.scheduled")
+TOPIC = os.getenv("KAFKA_TOPIC_APPOINTMENTS", "dev-healthcare-appointment-scheduled")
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081")
 

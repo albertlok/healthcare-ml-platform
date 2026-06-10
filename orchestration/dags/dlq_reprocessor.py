@@ -17,7 +17,7 @@ Schedule: @daily — DLQ volume is normally low (schema bugs, one-off issues).
   Trigger manually for urgent replay: `airflow dags trigger dlq_reprocessor`.
 
 Owner: data-engineering
-Upstream: delta_sink_simple.py → dev.healthcare.dlq.* topics
+Upstream: delta_sink_simple.py → dev-healthcare-dlq-* topics
 Downstream: corrected messages → original Kafka topics → bronze Delta tables
 """
 
@@ -79,8 +79,8 @@ STORAGE_OPTIONS = {
 
 # DLQ topic → original topic it shadows
 DLQ_TOPIC_MAP = {
-    "dev.healthcare.dlq.appointment.scheduled": "dev.healthcare.appointment.scheduled",
-    "dev.healthcare.dlq.patient.registered": "dev.healthcare.patient.registered",
+    "dev-healthcare-dlq-appointment-scheduled": "dev-healthcare-appointment-scheduled",
+    "dev-healthcare-dlq-patient-registered": "dev-healthcare-patient-registered",
 }
 
 POISON_BASE_PATH = "s3://healthcare/dlq_poison"
@@ -108,8 +108,8 @@ def dlq_reprocessor() -> None:
     def reprocess_appointments_dlq(**context: Any) -> dict:
         """Retry DLQ messages for the appointment topic."""
         return _reprocess_dlq_topic(
-            dlq_topic="dev.healthcare.dlq.appointment.scheduled",
-            original_topic="dev.healthcare.appointment.scheduled",
+            dlq_topic="dev-healthcare-dlq-appointment-scheduled",
+            original_topic="dev-healthcare-appointment-scheduled",
             partition_date=context["ds"],
         )
 
@@ -117,8 +117,8 @@ def dlq_reprocessor() -> None:
     def reprocess_patients_dlq(**context: Any) -> dict:
         """Retry DLQ messages for the patient topic."""
         return _reprocess_dlq_topic(
-            dlq_topic="dev.healthcare.dlq.patient.registered",
-            original_topic="dev.healthcare.patient.registered",
+            dlq_topic="dev-healthcare-dlq-patient-registered",
+            original_topic="dev-healthcare-patient-registered",
             partition_date=context["ds"],
         )
 

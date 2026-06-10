@@ -7,7 +7,7 @@ available. For production, use delta_sink.py (PySpark) or Kafka Connect S3 Sink.
 
 Dead-letter queue (DLQ):
   Messages that fail Avro deserialization are routed to a DLQ topic
-  (dev.healthcare.dlq.<original-topic>) rather than silently dropped.
+  (dev-healthcare-dlq-<original-topic>) rather than silently dropped.
   The dlq_reprocessor DAG retries correctable messages after schema fixes and
   writes irrecoverable ones to a poison Delta table for human review.
 
@@ -53,8 +53,8 @@ STORAGE_OPTIONS = {
 }
 
 TOPICS = {
-    "dev.healthcare.appointment.scheduled": "s3://healthcare/bronze/appointments_raw",
-    "dev.healthcare.patient.registered": "s3://healthcare/bronze/patients_raw",
+    "dev-healthcare-appointment-scheduled": "s3://healthcare/bronze/appointments_raw",
+    "dev-healthcare-patient-registered": "s3://healthcare/bronze/patients_raw",
 }
 
 CONSUMER_GROUP = "delta-sink-simple-consumer"
@@ -63,14 +63,14 @@ CONSUMER_GROUP = "delta-sink-simple-consumer"
 def _dlq_topic(original_topic: str) -> str:
     """Map a source topic to its dead-letter queue topic.
 
-    "dev.healthcare.appointment.scheduled"
-    → "dev.healthcare.dlq.appointment.scheduled"
+    "dev-healthcare-appointment-scheduled"
+    → "dev-healthcare-dlq-appointment-scheduled"
 
     The DLQ topic preserves the environment + domain prefix so Kafka ACLs and
-    retention policies can be managed at the {env}.{domain}.dlq.* wildcard level.
+    retention policies can be managed at the {env}-{domain}-dlq-* wildcard level.
     """
-    parts = original_topic.split(".", 2)  # ["dev", "healthcare", "appointment.scheduled"]
-    return f"{parts[0]}.{parts[1]}.dlq.{parts[2]}"
+    parts = original_topic.split("-", 2)  # ["dev", "healthcare", "appointment-scheduled"]
+    return f"{parts[0]}-{parts[1]}-dlq-{parts[2]}"
 
 
 def _publish_to_dlq(
@@ -160,6 +160,7 @@ def _write_batch(topic: str, records: list[dict[str, Any]]) -> None:
         storage_options=STORAGE_OPTIONS,
         mode="append",
         schema_mode="merge",
+        engine="rust",
     )
     log.info("batch_written_to_delta", topic=topic, rows=len(records), path=path)
 

@@ -189,7 +189,7 @@ flowchart TD
 flowchart LR
     FS["Feast\nOffline Store"] -->|"export parquet"| RF
 
-    subgraph DVC["DVC Pipeline — ml/dvc.yaml"]
+    subgraph DVC["DVC Pipeline — dvc.yaml"]
         RF["raw_features\nfeatures.parquet"]
         SP["split\ntrain / test parquet"]
         TR["train\nXGBoost + MLflow"]
@@ -213,14 +213,14 @@ flowchart LR
 | **Object Storage** | MinIO | Docker | AWS S3 / Azure ADLS Gen2 / GCS |
 | **Lakehouse Format** | Delta Lake 3.1 | Local PySpark | Databricks / AWS EMR / Azure Synapse |
 | **Batch Processing** | PySpark 3.5 | Spark standalone | Databricks / AWS EMR / GCP Dataproc |
-| **SQL Transform** | dbt Core 1.11 | DuckDB (free) | Snowflake / BigQuery / Redshift |
+| **SQL Transform** | dbt Core 1.8 | DuckDB (free) | Snowflake / BigQuery / Redshift |
 | **Orchestration** | Airflow 2.9 | Docker (Celery) | AWS MWAA / GCP Cloud Composer |
 | **Feature Store** | Feast 0.40 | SQLite + DuckDB | Tecton / AWS SageMaker FS |
 | **Data Versioning** | DVC 3.x | Local | DVC + S3 remote |
-| **Experiment Tracking** | MLflow 2.13 | Docker | Databricks MLflow / Azure ML |
+| **Experiment Tracking** | MLflow 3.0 | Docker | Databricks MLflow / Azure ML |
 | **ML Model** | XGBoost + SHAP | Local | SageMaker / Vertex AI / AzureML |
 | **Drift Monitoring** | Evidently AI | Local | Evidently Cloud / Arize |
-| **Vector Store** | ChromaDB 0.5 | Docker | Pinecone / Weaviate / OpenSearch |
+| **Vector Store** | ChromaDB 1.0 | Docker | Pinecone / Weaviate / OpenSearch |
 | **RAG Framework** | LangChain 0.2 | Local | Bedrock / Azure OpenAI |
 | **Inference API** | FastAPI 0.111 | Local | AWS Lambda / Cloud Run / AKS |
 | **Data Quality** | Great Expectations | Local | GX Cloud |
@@ -235,7 +235,10 @@ flowchart LR
 ```
 healthcare-ml-platform/
 ├── docker-compose.yml              # Full local stack (14 services)
-├── Makefile                        # 30+ dev shortcuts
+├── Dockerfile.airflow              # Custom Airflow image with all ML/data deps pre-installed
+├── requirements-airflow.txt        # Pinned Airflow extras (confluent-kafka, dbt, deltalake …)
+├── Makefile                        # 30+ dev shortcuts (PYTHON auto-resolves to .venv/bin/python3)
+├── dvc.yaml                        # DVC ML pipeline stages
 ├── pyproject.toml                  # Python deps + tool config
 ├── .env.example                    # All environment variables documented
 │
@@ -263,7 +266,9 @@ healthcare-ml-platform/
 │   └── dbt/                        # ④ SQL transformations
 │       ├── models/staging/         # 1:1 source casts
 │       ├── models/intermediate/    # Business logic joins
-│       └── models/marts/           # Core dims/facts + ML feature mart
+│       ├── models/marts/           # Core dims/facts + ML feature mart
+│       └── scripts/
+│           └── load_silver.py      # MinIO Delta → DuckDB silver schema (auto-run by dbt-run)
 │
 ├── orchestration/dags/             # ⑥ Airflow DAGs
 │   ├── patient_risk_pipeline.py    # Master hourly DAG
@@ -274,13 +279,14 @@ healthcare-ml-platform/
 ├── feature_store/feature_repo/     # ⑤ Feast definitions
 │   ├── feature_store.yaml
 │   ├── entities.py
-│   ├── feature_views.py            # 3 feature views, 13 features
-│   └── feature_services.py
+│   ├── feature_views.py            # 4 feature views (patient stats, demographics, context, provider)
+│   ├── feature_services.py
+│   └── scripts/
+│       └── export_features.py      # DuckDB gold → Feast parquet sources (run before feast-apply)
 │
 ├── ml/                             # ⑦ DVC + MLflow
-│   ├── dvc.yaml                    # Pipeline stages
 │   ├── params.yaml                 # Versioned hyperparameters
-│   ├── train.py                    # XGBoost + MLflow logging
+│   ├── train.py                    # XGBoost + MLflow logging (all 4 DVC stages)
 │   ├── evaluate.py                 # Metrics, SHAP, confusion matrix
 │   └── drift_detection.py          # Evidently AI reports
 │
@@ -331,7 +337,7 @@ make env            # Copies .env.example → .env
 make up
 ```
 
-Starts Docker services. On first launch, Airflow workers install additional Python packages via `_PIP_ADDITIONAL_REQUIREMENTS` — wait **5–10 minutes** before triggering DAGs.
+Starts Docker services. On first launch, `docker compose up` builds the custom `Dockerfile.airflow` image with all dependencies pre-installed — this takes a few minutes **once**. Subsequent starts are immediate.
 
 | Service | URL | Credentials |
 |---|---|---|
@@ -385,14 +391,14 @@ make seed-bronze    # Writes 2000 appointments + 500 patients directly to Delta 
 
 **Path B — Full Kafka streaming (demonstrates the streaming architecture):**
 ```bash
-make kafka-topics   # Create dev.healthcare.appointment.scheduled + patient.registered
+make kafka-topics   # Create dev-healthcare-appointment-scheduled + dev-healthcare-patient-registered
 make seed-once      # Produce 500 appointment + 200 patient Avro events to Kafka
 make kafka-sink     # Consume from Kafka → write to Delta Lake bronze
 ```
 
 Verify data landed in **MinIO Console** at http://localhost:9001 → `healthcare/bronze/`.
 
-> **Note:** The Kafka producers require `confluent-kafka fastavro faker` to be installed in the airflow-worker. On first run after `make up`, these are installed automatically via `_PIP_ADDITIONAL_REQUIREMENTS`. `kafka-connect` (the managed connector service) is also available but memory-intensive — the `delta_sink_simple.py` consumer is the recommended local alternative.
+> **Note:** `kafka-connect` (the managed connector service) is available but memory-intensive — the `delta_sink_simple.py` consumer is the recommended local alternative.
 
 ---
 
@@ -425,10 +431,12 @@ The DAG runs the following tasks in sequence:
 To run dbt independently of Airflow:
 
 ```bash
-make dbt-run       # Build all models against DuckDB
+make dbt-run       # Loads silver Delta tables → DuckDB, then runs all dbt models
 make dbt-test      # Run not_null, unique, and accepted_values tests
 make dbt-docs      # Serve lineage docs at http://localhost:8085
 ```
+
+`make dbt-run` automatically runs `pipelines/dbt/scripts/load_silver.py` first — this reads the silver Delta tables from MinIO and populates the `silver` schema in DuckDB so dbt has data to transform.
 
 dbt uses DuckDB for local dev and Snowflake for prod — switch with `DBT_TARGET=prod dbt run`.
 
@@ -437,9 +445,11 @@ dbt uses DuckDB for local dev and Snowflake for prod — switch with `DBT_TARGET
 ### Step 4 — Feature store (Feast)
 
 ```bash
-make feast-apply        # Register entities + feature views
+make feast-apply        # Export DuckDB gold → parquet, then register feature views
 make feast-materialize  # Backfill last 30 days into online store
 ```
+
+`make feast-apply` automatically runs `feature_store/scripts/export_features.py` first — this exports the dbt gold tables from DuckDB to `feature_store/feature_repo/data/*.parquet` so Feast has data sources to register against.
 
 Three feature views are registered:
 
@@ -457,6 +467,8 @@ Three feature views are registered:
 make dvc-repro      # Runs: raw_features → split → train → evaluate → register
 make dvc-metrics    # Show ROC-AUC, F1, precision/recall
 ```
+
+The DVC repository is already initialized (`dvc.yaml` at repo root). Each stage is cached — only changed stages re-run on subsequent calls.
 
 Track all experiments at **MLflow** → http://localhost:5001.
 
@@ -489,7 +501,7 @@ Avro schemas define strict contracts enforced by Schema Registry (auto-registere
 - `AppointmentEvent` — 17 typed fields covering the full lifecycle (SCHEDULED → NO_SHOW)
 - `PatientEvent` — demographics, insurance, communication preferences
 
-**Topics:** `dev.healthcare.appointment.scheduled`, `dev.healthcare.patient.registered` (3 partitions, RF=1)
+**Topics:** `dev-healthcare-appointment-scheduled`, `dev-healthcare-patient-registered` (3 partitions, RF=1)
 
 **Producer design:**
 - `acks='all'` + `enable.idempotence=True` — exactly-once semantics

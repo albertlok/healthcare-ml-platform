@@ -2,7 +2,7 @@
 Synthetic patient event producer.
 
 Emits patient registration and profile update events to the Kafka topic
-`dev.healthcare.patient.registered` using Avro serialization.
+`dev-healthcare-patient-registered` using Avro serialization.
 
 Usage:
     python patient_producer.py --count 500 --once
@@ -34,7 +34,7 @@ log = structlog.get_logger()
 fake = Faker()
 
 SCHEMA_PATH = Path(__file__).parent.parent / "schemas" / "patient_event.avsc"
-TOPIC = os.getenv("KAFKA_TOPIC_PATIENTS", "dev.healthcare.patient.registered")
+TOPIC = os.getenv("KAFKA_TOPIC_PATIENTS", "dev-healthcare-patient-registered")
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081")
 

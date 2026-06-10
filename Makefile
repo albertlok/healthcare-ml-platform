@@ -5,6 +5,9 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
+# Prefer the venv python when it exists; fall back to python3 / python.
+PYTHON := $(or $(wildcard .venv/bin/python3), $(shell command -v python3 2>/dev/null), python3)
+
 # ── Docker ────────────────────────────────────────────────────
 
 .PHONY: up
@@ -50,22 +53,22 @@ kafka-topics: ## Create all required Kafka topics
 	docker compose exec kafka kafka-topics \
 		--bootstrap-server localhost:29092 \
 		--create --if-not-exists \
-		--topic dev.healthcare.appointment.scheduled \
+		--topic dev-healthcare-appointment-scheduled \
 		--partitions 3 --replication-factor 1
 	docker compose exec kafka kafka-topics \
 		--bootstrap-server localhost:29092 \
 		--create --if-not-exists \
-		--topic dev.healthcare.patient.registered \
+		--topic dev-healthcare-patient-registered \
 		--partitions 3 --replication-factor 1
 	docker compose exec kafka kafka-topics \
 		--bootstrap-server localhost:29092 \
 		--create --if-not-exists \
-		--topic dev.healthcare.appointment.cancelled \
+		--topic dev-healthcare-appointment-cancelled \
 		--partitions 3 --replication-factor 1
 	docker compose exec kafka kafka-topics \
 		--bootstrap-server localhost:29092 \
 		--create --if-not-exists \
-		--topic dev.healthcare.appointment.completed \
+		--topic dev-healthcare-appointment-completed \
 		--partitions 3 --replication-factor 1
 	@echo "Topics created."
 
@@ -75,7 +78,7 @@ kafka-list: ## List all Kafka topics
 		--bootstrap-server localhost:29092 --list
 
 .PHONY: kafka-describe
-kafka-describe: ## Describe a topic: make kafka-describe topic=dev.healthcare.appointment.scheduled
+kafka-describe: ## Describe a topic: make kafka-describe topic=dev-healthcare-appointment-scheduled
 	docker compose exec kafka kafka-topics \
 		--bootstrap-server localhost:29092 \
 		--describe --topic $(topic)
@@ -115,11 +118,12 @@ kafka-sink: ## Consume all Kafka messages and write to Delta Lake bronze (no Spa
 # ── dbt ───────────────────────────────────────────────────────
 
 .PHONY: dbt-run
-dbt-run: ## Run all dbt models (DuckDB target)
+dbt-run: ## Load silver → DuckDB, then run all dbt models
+	$(PYTHON) pipelines/dbt/scripts/load_silver.py
 	cd pipelines/dbt && dbt run --target dev
 
 .PHONY: dbt-test
-dbt-test: ## Run all dbt tests
+dbt-test: dbt-run ## Build models then run all dbt tests
 	cd pipelines/dbt && dbt test --target dev
 
 .PHONY: dbt-docs
@@ -136,8 +140,12 @@ dbt-lint: ## Run sqlfluff lint on all dbt SQL
 
 # ── Feast ─────────────────────────────────────────────────────
 
+.PHONY: feast-export
+feast-export: ## Export DuckDB gold tables → Feast parquet sources (run after dbt-run)
+	$(PYTHON) feature_store/scripts/export_features.py
+
 .PHONY: feast-apply
-feast-apply: ## Apply Feast feature repository
+feast-apply: feast-export ## Export features then apply Feast feature repository
 	cd feature_store/feature_repo && feast apply
 
 .PHONY: feast-materialize
@@ -169,11 +177,11 @@ dvc-diff: ## Compare metrics to last commit
 
 .PHONY: train
 train: ## Run model training directly (no DVC)
-	python ml/train.py
+	$(PYTHON) ml/train.py
 
 .PHONY: evaluate
 evaluate: ## Run model evaluation and generate reports
-	python ml/evaluate.py
+	$(PYTHON) ml/evaluate.py
 
 # ── Spark ─────────────────────────────────────────────────────
 
@@ -198,7 +206,7 @@ spark-silver: ## Run silver cleaning job
 
 .PHONY: rag-embed
 rag-embed: ## Embed synthetic clinical notes into ChromaDB
-	python rag/embed_notes.py
+	$(PYTHON) rag/embed_notes.py
 
 .PHONY: rag-start
 rag-start: ## Start the FastAPI RAG inference endpoint at :8888
