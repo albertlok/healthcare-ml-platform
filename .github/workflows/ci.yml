@@ -23,9 +23,11 @@ jobs:
       - name: Install lint + test dependencies
         # Intentionally lightweight — avoids pyspark, feast, mlflow, chromadb.
         # Runtime packages are tested via integration tests against the Docker stack.
+        # Pin black to match the version used locally — black formatting is deterministic
+        # within a version but can change across versions.
         run: |
           pip install \
-            black isort flake8 flake8-bugbear \
+            "black==25.12.0" isort flake8 flake8-bugbear \
             pytest pytest-cov pytest-mock pytest-asyncio \
             structlog \
             pandas numpy pyarrow \
