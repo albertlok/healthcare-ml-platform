@@ -140,6 +140,7 @@ def main(appointment_rows: int) -> None:
         appt_df,
         storage_options=STORAGE_OPTIONS,
         mode="overwrite",
+        schema_mode="overwrite",
     )
 
     print(f"Writing patients Delta table → {patient_path}")
@@ -148,6 +149,7 @@ def main(appointment_rows: int) -> None:
         patient_df,
         storage_options=STORAGE_OPTIONS,
         mode="overwrite",
+        schema_mode="overwrite",
     )
 
     # Verify
