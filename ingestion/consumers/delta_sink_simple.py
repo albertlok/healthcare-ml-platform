@@ -11,6 +11,19 @@ Dead-letter queue (DLQ):
   The dlq_reprocessor DAG retries correctable messages after schema fixes and
   writes irrecoverable ones to a poison Delta table for human review.
 
+Resilience:
+  DlqCircuitBreaker — three-state (CLOSED/OPEN/HALF_OPEN) circuit breaker on the
+    DLQ producer.  When the DLQ broker is unhealthy, publishes are skipped and the
+    run loop applies exponential backpressure (poll_delay_seconds) so the consumer
+    slows ingestion instead of accumulating uncommitted offsets at full throughput.
+    After cooldown_seconds the circuit enters HALF_OPEN and allows one probe publish;
+    success closes the circuit, failure reopens it with a fresh timer.
+
+  SchemaIncidentThrottle — per-topic consecutive-failure counter.  When a topic
+    exceeds `threshold` consecutive deserialization failures the run loop sleeps an
+    exponentially growing delay before each poll, preventing the consumer from racing
+    through thousands of bad messages during a schema incident.
+
 Usage:
     python delta_sink_simple.py --max-messages 1000
     python delta_sink_simple.py --run-forever
@@ -23,6 +36,7 @@ import base64
 import json
 import os
 import signal
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -60,6 +74,122 @@ TOPICS = {
 CONSUMER_GROUP = "delta-sink-simple-consumer"
 
 
+class DlqCircuitBreaker:
+    """Three-state circuit breaker for the DLQ Kafka producer.
+
+    CLOSED   — normal; all publishes attempted.
+    OPEN     — DLQ broker unhealthy; publishes skipped, consumer backpressure applied.
+    HALF_OPEN — cooldown elapsed; one probe publish allowed to test recovery.
+
+    The run loop reads poll_delay_seconds before each consumer.poll() so the consumer
+    automatically slows ingestion during an outage instead of accumulating uncommitted
+    offsets at full throughput.
+    """
+
+    _CLOSED = "closed"
+    _OPEN = "open"
+    _HALF_OPEN = "half_open"
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        cooldown_seconds: float = 60.0,
+        max_backpressure_seconds: float = 30.0,
+    ) -> None:
+        self._failure_threshold = failure_threshold
+        self._cooldown_seconds = cooldown_seconds
+        self._max_backpressure_seconds = max_backpressure_seconds
+        self._consecutive_failures = 0
+        self._state = self._CLOSED
+        self._opened_at: float | None = None
+
+    @property
+    def state(self) -> str:
+        if self._state == self._OPEN and self._opened_at is not None:
+            if time.monotonic() - self._opened_at >= self._cooldown_seconds:
+                return self._HALF_OPEN
+        return self._state
+
+    def record_success(self) -> None:
+        prev = self._state
+        self._state = self._CLOSED
+        self._consecutive_failures = 0
+        self._opened_at = None
+        if prev != self._CLOSED:
+            log.info("dlq_circuit_closed", previous_state=prev)
+
+    def record_failure(self) -> None:
+        self._consecutive_failures += 1
+        current = self.state
+        if current == self._HALF_OPEN:
+            # Probe failed — reopen with a fresh cooldown timer.
+            self._state = self._OPEN
+            self._opened_at = time.monotonic()
+            log.error("dlq_circuit_probe_failed_reopened", cooldown_seconds=self._cooldown_seconds)
+        elif current == self._CLOSED and self._consecutive_failures >= self._failure_threshold:
+            self._state = self._OPEN
+            self._opened_at = time.monotonic()
+            log.error(
+                "dlq_circuit_opened",
+                consecutive_failures=self._consecutive_failures,
+                cooldown_seconds=self._cooldown_seconds,
+            )
+
+    @property
+    def is_open(self) -> bool:
+        """True when DLQ publishes should be skipped (fully OPEN, not probing)."""
+        return self.state == self._OPEN
+
+    @property
+    def poll_delay_seconds(self) -> float:
+        """Seconds the run loop should sleep before the next consumer.poll().
+
+        Zero when the circuit is CLOSED or HALF_OPEN (probe is allowed).
+        Grows exponentially with excess failures while the circuit is OPEN.
+        """
+        if self.state != self._OPEN:
+            return 0.0
+        excess = max(0, self._consecutive_failures - self._failure_threshold)
+        return min(self._max_backpressure_seconds, 1.0 * (2 ** min(excess, 5)))
+
+
+class SchemaIncidentThrottle:
+    """Per-topic backpressure for sustained Avro deserialization failures.
+
+    When a topic's consecutive failure count exceeds `threshold`, delay_for() returns
+    an exponentially growing sleep time so the consumer slows down during a schema
+    incident rather than racing through thousands of bad messages and overloading the
+    DLQ producer.
+    """
+
+    def __init__(self, threshold: int = 10, max_delay_seconds: float = 5.0) -> None:
+        self._threshold = threshold
+        self._max_delay = max_delay_seconds
+        self._consecutive: dict[str, int] = {}
+
+    def record_failure(self, topic: str) -> None:
+        self._consecutive[topic] = self._consecutive.get(topic, 0) + 1
+        if self._consecutive[topic] == self._threshold:
+            log.warning(
+                "schema_incident_throttle_activated",
+                topic=topic,
+                consecutive_failures=self._consecutive[topic],
+            )
+
+    def record_success(self, topic: str) -> None:
+        prev = self._consecutive.get(topic, 0)
+        if prev > 0:
+            log.info("schema_incident_throttle_cleared", topic=topic, was_consecutive=prev)
+        self._consecutive[topic] = 0
+
+    def delay_for(self, topic: str) -> float:
+        n = self._consecutive.get(topic, 0)
+        if n < self._threshold:
+            return 0.0
+        excess = n - self._threshold
+        return min(self._max_delay, 0.1 * (2 ** min(excess, 6)))
+
+
 def _dlq_topic(original_topic: str) -> str:
     """Map a source topic to its dead-letter queue topic.
 
@@ -75,6 +205,7 @@ def _dlq_topic(original_topic: str) -> str:
 
 def _publish_to_dlq(
     producer: Producer,
+    circuit_breaker: DlqCircuitBreaker,
     msg: Any,
     error_type: str,
     error_message: str,
@@ -86,13 +217,29 @@ def _publish_to_dlq(
     dlq_reprocessor DAG can retry deserialization after a schema fix without
     needing the original Kafka messages to still be within retention.
 
+    When the DlqCircuitBreaker is OPEN the publish is skipped entirely; the offset
+    stays uncommitted so the message replays on restart once the DLQ recovers.
+    When the circuit is HALF_OPEN one probe publish is allowed; success closes the
+    circuit, failure reopens it with a fresh cooldown timer.
+
     Args:
         producer: Kafka Producer for publishing to the DLQ topic.
+        circuit_breaker: Shared circuit breaker tracking DLQ producer health.
         msg: The original Kafka Message that failed deserialization.
         error_type: Class name of the exception (e.g. "SerializerException").
         error_message: Exception string, truncated to 2 KB to avoid huge payloads.
         retry_count: How many times this specific message has been retried.
     """
+    if circuit_breaker.is_open:
+        log.warning(
+            "dlq_publish_skipped_circuit_open",
+            original_topic=msg.topic(),
+            partition=msg.partition(),
+            offset=msg.offset(),
+            backpressure_seconds=circuit_breaker.poll_delay_seconds,
+        )
+        return
+
     ts_info = msg.timestamp()
     envelope = {
         "original_topic": msg.topic(),
@@ -110,6 +257,7 @@ def _publish_to_dlq(
     try:
         producer.produce(dlq, value=json.dumps(envelope).encode("utf-8"))
         producer.flush()
+        circuit_breaker.record_success()
         log.warning(
             "message_routed_to_dlq",
             dlq_topic=dlq,
@@ -119,14 +267,16 @@ def _publish_to_dlq(
             error_type=error_type,
         )
     except Exception as publish_exc:
-        # DLQ publish failed — log both errors but don't crash the consumer.
-        # The message offset will NOT be committed, so it's retried on restart.
+        circuit_breaker.record_failure()
+        # Offset NOT committed — message replays on restart.
         log.error(
             "dlq_publish_failed_message_will_retry",
             dlq_topic=dlq,
             original_offset=msg.offset(),
             original_error=error_type,
             publish_error=str(publish_exc),
+            circuit_state=circuit_breaker.state,
+            backpressure_seconds=circuit_breaker.poll_delay_seconds,
         )
 
 
@@ -182,9 +332,13 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
     )
     consumer.subscribe(list(TOPICS.keys()))
 
-    # Separate producer for DLQ — reuses the same broker connection pool but
-    # is kept distinct so DLQ publish failures don't affect the main consumer.
+    # Separate producer for DLQ — kept distinct so DLQ publish failures don't
+    # affect the main consumer connection pool.
     dlq_producer = Producer({"bootstrap.servers": BOOTSTRAP_SERVERS})
+
+    # Resilience objects — see module docstring for behaviour.
+    dlq_circuit = DlqCircuitBreaker()
+    schema_throttle = SchemaIncidentThrottle()
 
     running = [True]
 
@@ -202,6 +356,25 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
 
     try:
         while running[0]:
+            # --- Backpressure gate -------------------------------------------
+            # Combines DLQ circuit breaker delay (broker outage) and per-topic
+            # schema-incident throttle.  Slept in 2-second chunks so SIGINT/SIGTERM
+            # is checked frequently; loop re-evaluates both on each wake-up so the
+            # delay drains naturally once the underlying condition clears.
+            backpressure = max(
+                dlq_circuit.poll_delay_seconds,
+                max((schema_throttle.delay_for(t) for t in TOPICS), default=0.0),
+            )
+            if backpressure > 0:
+                log.debug(
+                    "consumer_backpressure_applied",
+                    delay_seconds=backpressure,
+                    circuit_state=dlq_circuit.state,
+                )
+                time.sleep(min(backpressure, 2.0))
+                continue
+            # ----------------------------------------------------------------
+
             msg = consumer.poll(timeout=2.0)
 
             if msg is None:
@@ -225,12 +398,12 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
 
             try:
                 record = deserializers[topic](msg.value(), ctx)
+                schema_throttle.record_success(topic)
             except Exception as exc:
                 # Deserialization failed — route to DLQ instead of dropping.
-                # The offset is NOT committed, so the consumer re-sees this
-                # message on restart. The DLQ envelope holds the raw bytes for
-                # retry analysis by the dlq_reprocessor DAG.
-                _publish_to_dlq(dlq_producer, msg, type(exc).__name__, str(exc))
+                # The offset is NOT committed so the message replays on restart.
+                schema_throttle.record_failure(topic)
+                _publish_to_dlq(dlq_producer, dlq_circuit, msg, type(exc).__name__, str(exc))
                 dlq_counts[topic] = dlq_counts.get(topic, 0) + 1
                 continue
 
@@ -259,6 +432,7 @@ def run(max_messages: int = 0, batch_size: int = 100) -> None:
             "delta_sink_stopped",
             total_consumed=total,
             dlq_totals=dlq_counts,
+            dlq_circuit_state=dlq_circuit.state,
         )
 
 

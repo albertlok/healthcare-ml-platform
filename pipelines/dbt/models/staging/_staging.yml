@@ -30,8 +30,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values: ["SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"]
+              values: ["SCHEDULED", "RESCHEDULED", "CANCELLED", "COMPLETED", "NO_SHOW"]
       - name: duration_minutes
         tests:
           - not_null
@@ -49,14 +48,12 @@ models:
       - name: gender
         tests:
           - accepted_values:
-              arguments:
-                values: ["MALE", "FEMALE", "NON_BINARY", "PREFER_NOT_TO_SAY", "UNKNOWN"]
+              values: ["MALE", "FEMALE", "NON_BINARY", "PREFER_NOT_TO_SAY", "UNKNOWN"]
       - name: insurance_type
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values: ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "WORKERS_COMP", "TRICARE", "UNKNOWN"]
+              values: ["COMMERCIAL", "MEDICARE", "MEDICAID", "SELF_PAY", "WORKERS_COMP", "TRICARE", "UNKNOWN"]
       - name: is_current
         tests:
           - not_null
